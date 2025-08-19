@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>NURA AI</title>
+  <style>
+    body {
+      margin: 0;
+      background: black;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+
+    .magic-container {
+      position: relative;
+      width: 900px;
+      height: 600px;
+    }
+
+        /* 🔄 Clockwise Rotations */
+    .rotate-slow {
+      animation: rotate 12s linear infinite;
+      transform-origin: center;
+    }
+    
+    .rotate-slowx {
+      animation: rotate 11s linear infinite;
+      transform-origin: center;
+    }
+    
+    .rotate-slowy {
+      animation: rotate 10s linear infinite;
+      transform-origin: center;
+    }
+    
+    
+    .rotate-fast {
+      animation: rotate 4s linear infinite;
+      transform-origin: center;
+    }
+    
+    .rotate-xfast {
+      animation: rotate 2s linear infinite;
+      transform-origin: center;
+    }
+    
+    /* 🔁 Counter-Clockwise Rotations */
+    .rotate-slow-reverse {
+      animation: rotateReverse 12s linear infinite;
+      transform-origin: center;
+    }
+    
+    .rotate-medium-reverse {
+      animation: rotateReverse 8s linear infinite;
+      transform-origin: center;
+    }
+    
+    .rotate-fast-reverse {
+      animation: rotateReverse 4s linear infinite;
+      transform-origin: center;
+    }
+    
+    .rotate-xfast-reverse {
+      animation: rotateReverse 2s linear infinite;
+      transform-origin: center;
+    }
+    .glow {
+      stroke: lime;
+      stroke-width: 1.5;
+      fill: none;
+      filter: drop-shadow(0 0 5px lime) drop-shadow(0 0 10px lime);
+    }
+
+    @keyframes rotate {
+      0%   { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    @keyframes rotateReverse {
+      0%   { transform: rotate(360deg); }
+      100% { transform: rotate(0deg); }
+    }
+
+    .center-text {
+      fill: white;
+      font-size: 14px;
+      text-anchor: middle;
+      dominant-baseline: middle;
+      font-family: 'Courier New', monospace;
+    }
+  </style>
+</head>
+<body>
+  <div class="magic-container">
+    <svg viewBox="0 0 200 200" width="100%" height="100%">
+      <!-- Outer Rotating Circle -->
+      <g class="rotate-slow">
+        <circle cx="100" cy="100" r="95" class="glow" />
+        <circle cx="100" cy="100" r="85" class="glow" />
+        <circle cx="100" cy="10" r="10" class="glow" />
+        <circle cx="100" cy="190" r="10" class="glow" />
+        <!-- Add glyph text here if needed -->
+      </g>
+      <g class="rotate-slowx">
+          <circle cx="100" cy="10" r="10" class="glow" />
+          <circle cx="100" cy="190" r="10" class="glow" />
+          <circle cx="100" cy="10" r="5" class="glow" />
+          <circle cx="100" cy="190" r="5" class="glow" />
+        </g>
+        <g class="rotate-slowy">
+          <circle cx="100" cy="10" r="10" class="glow" />
+          <circle cx="100" cy="190" r="10" class="glow" />
+          <circle cx="100" cy="10" r="5" class="glow" />
+          <circle cx="100" cy="190" r="5" class="glow" />
+        </g>
+      <!-- Inner circle -->
+      <g class="rotate-slow">
+        <circle cx="100" cy="100" r="30" class="glow" />
+        <circle cx="100" cy="10" r="5" class="glow" />
+        <circle cx="100" cy="190" r="5" class="glow" />
+        <!-- Add glyph text here if needed -->
+      </g>
+
+      <!-- Inner Rotating Polygon -->
+      <g class="rotate-fast">
+        <polygon points="100,40 140,60 160,100 140,140 100,160 60,140 40,100 60,60" class="glow" />
+        <circle cx="100" cy="100" r="50" class="glow" />
+        <circle cx="100" cy="100" r="65" class="glow" />
+        <polygon points="100,80 120,100 100,120 80,100" class="glow" />
+      </g>
+
+      <!-- Static Core & Text -->
+      <circle cx="100" cy="100" r="5" fill="black" />
+      <text x="100" y="100" class="center-text">NURA</text>
+    </svg>
+  </div>
+   <!-- Neura AI Input & Response -->
+    <div class="neura-input" style="position: absolute; bottom: 40px; text-align: center; width: 100%;">
+    <input type="text" id="command" placeholder="Type or speak your message..." style="padding: 10px; width: 300px; font-size: 16px;" />
+    <button onclick="sendToNeura()" style="padding: 10px;">Send</button>
+    <button onclick="startListening()" style="padding: 10px;">🎤 Speak</button>
+    <p id="response-text" style="color: lime; margin-top: 10px;"></p>
+  </div>
+  <script>
+  async function sendToNeura() {
+    const message = document.getElementById("command").value;
+    if (!message) return;
+
+    const res = await fetch("/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message })
+    });
+
+    const data = await res.json();
+    document.getElementById("response-text").innerText = "🧠 Neura: " + data.response;
+
+    // Optional: Speak the result
+    // const synth = window.speechSynthesis;
+    // const utter = new SpeechSynthesisUtterance(data.response);
+    // synth.speak(utter);
+  }
+
+  function startListening() {
+    const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+    recognition.lang = 'en-IN';
+    recognition.start();
+
+    recognition.onresult = function(event) {
+      const text = event.results[0][0].transcript;
+      document.getElementById("command").value = text;
+      sendToNeura();
+    };
+  }
+</script>
+</body>
+</html>

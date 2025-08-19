@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pyttsx3
+speechrecognition
+pywhatkit
+google-generativeai
+pygetwindow
+opencv-python
+wikipedia
+python-multipart
