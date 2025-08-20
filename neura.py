@@ -9,7 +9,7 @@ import pygetwindow as gw
 import cv2
 import google.generativeai as genai
 
-genai.configure(api_key = "AIzaSyCxPQb9KVxN7GhIpDJvbTGN7iEOaxNyol8")
+genai.configure(api_key = os.getenv("GEMINI_API_KEY"))
 model = genai.GenerativeModel('gemini-2.5-flash')
 
 engine = pyttsx3.init('sapi5')
