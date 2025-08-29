@@ -8,6 +8,11 @@ import pywhatkit
 import pygetwindow as gw
 import cv2
 import google.generativeai as genai
+from dotenv import load_dotenv
+from groq import Groq
+
+load_dotenv()
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 genai.configure(api_key = os.getenv("GEMINI_API_KEY"))
 model = genai.GenerativeModel('gemini-2.5-flash')
@@ -37,23 +42,58 @@ def wishtime():
         speak("Good Night!")
     speak("I am Neura. Please tell, how may I help you?")
 
-def chat_with_gemini(prompt, chat_history=[]):
+def chat_with_ai(prompt, chat_history=[]):
     try:
-        # Build a controlled prompt to enforce concise and focused replies
+        # ✅ Try Gemini first
         control_instruction = (
             "Answer clearly and concisely based only on the question asked. "
             "Avoid any extra explanation or details not explicitly requested. "
             "If clarification is needed, ask the user."
         )
         full_prompt = f"{control_instruction}\n\nUser: {prompt}"
-        # Ensure chat history is a list of (user, bot) messages
+
+        # Ensure chat history works for Gemini
         chat = model.start_chat(history=chat_history)
         response = chat.send_message(full_prompt)
+
+        # Check if Gemini gave a valid response
+        if not response.text or response.text.strip() == "" or "error" in response.text.lower():
+            raise ValueError("Gemini response invalid")
+
         chat_history.append(("user", prompt))
         chat_history.append(("bot", response.text))
         return response.text, chat_history
+
     except Exception as e:
-        return f"Error: {e}", chat_history
+        print(f"[Gemini failed: {e}] ⚡ Switching to Groq...")
+
+        # ✅ Fallback to Groq
+        try:
+            messages = []
+            for role, content in chat_history:
+                messages.append({
+                    "role": "user" if role == "user" else "assistant",
+                    "content": content
+                })
+
+            messages.append({"role": "user", "content": prompt})
+
+            response = groq_client.chat.completions.create(
+                model="llama3-70b-8192",   # You can also try "mixtral-8x7b"
+                messages=messages,
+                temperature=0.7,
+            )
+
+            reply = response.choices[0].message.content
+
+            chat_history.append(("user", prompt))
+            chat_history.append(("bot", reply))
+
+            return reply, chat_history
+
+        except Exception as e2:
+            return f"Both Gemini and Groq failed: {e2}", chat_history
+
 
 def ask_neura(user_message):
     global chat_history
@@ -80,7 +120,7 @@ def ask_neura(user_message):
         response = f"The time is {current_time}"
     else:
         speak("Let me think...")
-        response, chat_history = chat_with_gemini(user_message, chat_history)
+        response, chat_history = chat_with_ai(user_message, chat_history)
         print("Nura:",response)
 
     speak(response)
