@@ -1,179 +1,281 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>NURA AI</title>
-  <style>
-    body {
-      margin: 0;
-      background: black;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
-    }
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NURA AI Voice Interface</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
-    .magic-container {
-      position: relative;
-      width: 900px;
-      height: 600px;
-    }
+    <style>
+        :root {
+            --primary-color: lime;
+            --bg-color: black;
+            --text-secondary-color: #888;
+        }
 
-        /* 🔄 Clockwise Rotations */
-    .rotate-slow {
-      animation: rotate 12s linear infinite;
-      transform-origin: center;
-    }
-    
-    .rotate-slowx {
-      animation: rotate 11s linear infinite;
-      transform-origin: center;
-    }
-    
-    .rotate-slowy {
-      animation: rotate 10s linear infinite;
-      transform-origin: center;
-    }
-    
-    
-    .rotate-fast {
-      animation: rotate 4s linear infinite;
-      transform-origin: center;
-    }
-    
-    .rotate-xfast {
-      animation: rotate 2s linear infinite;
-      transform-origin: center;
-    }
-    
-    /* 🔁 Counter-Clockwise Rotations */
-    .rotate-slow-reverse {
-      animation: rotateReverse 12s linear infinite;
-      transform-origin: center;
-    }
-    
-    .rotate-medium-reverse {
-      animation: rotateReverse 8s linear infinite;
-      transform-origin: center;
-    }
-    
-    .rotate-fast-reverse {
-      animation: rotateReverse 4s linear infinite;
-      transform-origin: center;
-    }
-    
-    .rotate-xfast-reverse {
-      animation: rotateReverse 2s linear infinite;
-      transform-origin: center;
-    }
-    .glow {
-      stroke: lime;
-      stroke-width: 1.5;
-      fill: none;
-      filter: drop-shadow(0 0 5px lime) drop-shadow(0 0 10px lime);
-    }
+        body {
+            margin: 0;
+            background: var(--bg-color);
+            color: var(--primary-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: 'Roboto Mono', monospace;
+            text-align: center;
+        }
 
-    @keyframes rotate {
-      0%   { transform: rotate(0deg); }
-      100% { transform: rotate(360deg); }
-    }
+        .assistant-container {
+            width: 100%;
+            max-width: 90vw;
+            height: 90vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
 
-    @keyframes rotateReverse {
-      0%   { transform: rotate(360deg); }
-      100% { transform: rotate(0deg); }
-    }
+        .main-content {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            position: relative;
+        }
+        
+        .magic-container {
+            position: relative;
+            width: clamp(250px, 50vw, 400px); /* Responsive size */
+            height: clamp(250px, 50vw, 400px);
+            transition: transform 0.5s ease-in-out;
+        }
 
-    .center-text {
-      fill: white;
-      font-size: 14px;
-      text-anchor: middle;
-      dominant-baseline: middle;
-      font-family: 'Courier New', monospace;
-    }
-  </style>
+        .glow {
+            stroke: var(--primary-color);
+            stroke-width: 1;
+            fill: none;
+            filter: drop-shadow(0 0 5px var(--primary-color)) drop-shadow(0 0 10px var(--primary-color));
+            transition: filter 0.5s ease;
+        }
+
+        .center-text {
+            fill: var(--primary-color);
+            font-size: 14px;
+            text-anchor: middle;
+            dominant-baseline: middle;
+            font-family: 'Roboto Mono', monospace;
+            font-weight: 500;
+        }
+        
+        @keyframes rotate { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        @keyframes rotateReverse { 0% { transform: rotate(360deg); } 100% { transform: rotate(0deg); } }
+
+        .rotate-slow { animation: rotate 12s linear infinite; transform-origin: center; }
+        .rotate-slowx { animation: rotate 11s linear infinite; transform-origin: center; }
+        .rotate-fast { animation: rotate 4s linear infinite; transform-origin: center; }
+        
+        .magic-container.listening .rotate-fast { animation-duration: 0.8s; }
+        .magic-container.listening .glow { filter: drop-shadow(0 0 10px var(--primary-color)) drop-shadow(0 0 20px var(--primary-color)); }
+        .magic-container.listening { transform: scale(1.05); }
+
+        .magic-container.processing .rotate-slow { animation: rotateReverse 3s linear infinite; }
+        .magic-container.processing .rotate-fast { animation: rotateReverse 1.5s linear infinite; }
+        
+        .status-display {
+            position: absolute;
+            bottom: -80px;
+            width: 100%;
+            height: 6em; 
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        
+        #nura-response, #user-query, #status-text { min-height: 1.5em; }
+        #status-text { font-size: 1rem; color: var(--text-secondary-color); }
+        #nura-response { font-size: 1.2rem; font-weight: 500; }
+        #user-query { font-style: italic; color: var(--text-secondary-color); margin-top: 0.5rem; }
+
+        .mic-button {
+            width: 70px;
+            height: 70px;
+            border-radius: 50%;
+            border: 2px solid var(--primary-color);
+            background-color: transparent;
+            color: var(--primary-color);
+            font-size: 1.8rem;
+            /* Clicks are no longer needed, so remove pointer cursor */
+            cursor: default; 
+            transition: all 0.2s ease;
+            margin-top: 100px;
+        }
+        /* Remove hover effect as button is not interactive */
+        .mic-button:hover { background-color: transparent; transform: none; }
+    </style>
 </head>
 <body>
-  <div class="magic-container">
-    <svg viewBox="0 0 200 200" width="100%" height="100%">
-      <!-- Outer Rotating Circle -->
-      <g class="rotate-slow">
-        <circle cx="100" cy="100" r="95" class="glow" />
-        <circle cx="100" cy="100" r="85" class="glow" />
-        <circle cx="100" cy="10" r="10" class="glow" />
-        <circle cx="100" cy="190" r="10" class="glow" />
-        <!-- Add glyph text here if needed -->
-      </g>
-      <g class="rotate-slowx">
-          <circle cx="100" cy="10" r="10" class="glow" />
-          <circle cx="100" cy="190" r="10" class="glow" />
-          <circle cx="100" cy="10" r="5" class="glow" />
-          <circle cx="100" cy="190" r="5" class="glow" />
-        </g>
-        <g class="rotate-slowy">
-          <circle cx="100" cy="10" r="10" class="glow" />
-          <circle cx="100" cy="190" r="10" class="glow" />
-          <circle cx="100" cy="10" r="5" class="glow" />
-          <circle cx="100" cy="190" r="5" class="glow" />
-        </g>
-      <!-- Inner circle -->
-      <g class="rotate-slow">
-        <circle cx="100" cy="100" r="30" class="glow" />
-        <circle cx="100" cy="10" r="5" class="glow" />
-        <circle cx="100" cy="190" r="5" class="glow" />
-        <!-- Add glyph text here if needed -->
-      </g>
 
-      <!-- Inner Rotating Polygon -->
-      <g class="rotate-fast">
-        <polygon points="100,40 140,60 160,100 140,140 100,160 60,140 40,100 60,60" class="glow" />
-        <circle cx="100" cy="100" r="50" class="glow" />
-        <circle cx="100" cy="100" r="65" class="glow" />
-        <polygon points="100,80 120,100 100,120 80,100" class="glow" />
-      </g>
+    <div class="assistant-container">
+        <main class="main-content">
+            <div class="magic-container" id="magic-container">
+                <svg viewBox="0 0 200 200" width="100%" height="100%">
+                    <g class="rotate-slow">
+                        <circle cx="100" cy="100" r="95" class="glow" />
+                        <circle cx="100" cy="100" r="85" class="glow" />
+                        <circle cx="100" cy="10" r="10" class="glow" />
+                        <circle cx="100" cy="190" r="10" class="glow" />
+                    </g>
+                    <g class="rotate-slowx">
+                        <circle cx="100" cy="10" r="10" class="glow" />
+                        <circle cx="10" cy="100" r="5" class="glow" />
+                        <circle cx="190" cy="100" r="5" class="glow" />
+                    </g>
+                    <g class="rotate-slow">
+                        <circle cx="100" cy="100" r="30" class="glow" />
+                    </g>
+                    <g class="rotate-fast">
+                        <polygon points="100,40 140,60 160,100 140,140 100,160 60,140 40,100 60,60" class="glow" />
+                        <circle cx="100" cy="100" r="65" class="glow" />
+                    </g>
+                    <circle cx="100" cy="100" r="5" fill="black" />
+                    <text x="100" y="100" class="center-text">NURA</text>
+                </svg>
+            </div>
+            <div class="status-display">
+                <p id="status-text"></p>
+                <p id="nura-response"></p>
+                <p id="user-query"></p>
+            </div>
+        </main>
 
-      <!-- Static Core & Text -->
-      <circle cx="100" cy="100" r="5" fill="black" />
-      <text x="100" y="100" class="center-text">NURA</text>
-    </svg>
-  </div>
-   <!-- Neura AI Input & Response -->
-    <div class="neura-input" style="position: absolute; bottom: 40px; text-align: center; width: 100%;">
-    <input type="text" id="command" placeholder="Type or speak your message..." style="padding: 10px; width: 300px; font-size: 16px;" />
-    <button onclick="sendToNeura()" style="padding: 10px;">Send</button>
-    <button onclick="startListening()" style="padding: 10px;">🎤 Speak</button>
-    <p id="response-text" style="color: lime; margin-top: 10px;"></p>
-  </div>
-  <script>
-  async function sendToNeura() {
-    const message = document.getElementById("command").value;
-    if (!message) return;
+        <footer class="footer">
+            <button class="mic-button" id="mic-button" aria-label="Assistant Status">
+                <i class="fas fa-microphone"></i>
+            </button>
+        </footer>
+    </div>
 
-    const res = await fetch("/ask", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message })
-    });
+    <script>
+        const magicContainer = document.getElementById('magic-container');
+        const micButton = document.getElementById('mic-button');
+        const statusText = document.getElementById('status-text');
+        const nuraResponseText = document.getElementById('nura-response');
+        const userQueryText = document.getElementById('user-query');
 
-    const data = await res.json();
-    document.getElementById("response-text").innerText = "🧠 Neura: " + data.response;
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const recognition = new SpeechRecognition();
+        
+        // --- CHANGE 1: Enable continuous listening ---
+        recognition.continuous = true;
+        recognition.lang = 'en-US';
+        recognition.interimResults = false;
+        
+        let isProcessing = false;
+        
+        function setUIState(state) {
+            magicContainer.className = 'magic-container';
+            
+            // The mic button is never interactive, so we just manage its style based on state
+            micButton.classList.remove('disabled');
 
-    // Optional: Speak the result
-    // const synth = window.speechSynthesis;
-    // const utter = new SpeechSynthesisUtterance(data.response);
-    // synth.speak(utter);
-  }
+            switch (state) {
+                case 'idle':
+                    isProcessing = false;
+                    statusText.textContent = 'Waiting for command...';
+                    break;
+                case 'listening':
+                    isProcessing = false;
+                    magicContainer.classList.add('listening');
+                    statusText.textContent = 'Listening...';
+                    userQueryText.textContent = '';
+                    nuraResponseText.textContent = '';
+                    break;
+                case 'processing':
+                    magicContainer.classList.add('processing');
+                    statusText.textContent = 'Processing...';
+                    micButton.classList.add('disabled');
+                    break;
+                case 'speaking': // This state is kept for visual feedback
+                    statusText.textContent = '';
+                    micButton.classList.add('disabled');
+                    break;
+                case 'error':
+                     isProcessing = false;
+                     statusText.textContent = 'Error... restarting listener.';
+                     break;
+            }
+        }
 
-  function startListening() {
-    const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
-    recognition.lang = 'en-IN';
-    recognition.start();
+        // --- CHANGE 2: The mic button click listener is no longer needed ---
+        // micButton.addEventListener('click', () => { ... });
 
-    recognition.onresult = function(event) {
-      const text = event.results[0][0].transcript;
-      document.getElementById("command").value = text;
-      sendToNeura();
-    };
-  }
-</script>
+        recognition.onstart = () => setUIState('listening');
+
+        recognition.onresult = (event) => {
+            if (isProcessing) return;
+            isProcessing = true;
+
+            const transcript = event.results[event.results.length - 1][0].transcript.trim();
+            if (transcript) { // Only process if the transcript is not empty
+                userQueryText.textContent = `> ${transcript}`;
+                processTranscript(transcript);
+            } else {
+                isProcessing = false; // If transcript is empty, reset flag and continue listening
+            }
+        };
+
+        recognition.onerror = (event) => {
+            console.error('Speech recognition error:', event.error);
+            setUIState('error');
+        };
+
+        // --- CHANGE 3: Add an 'onend' handler to automatically restart the listener ---
+        recognition.onend = () => {
+            // Only restart if we are not in the middle of processing a command
+            if (!isProcessing) {
+                recognition.start();
+            }
+        };
+
+        async function processTranscript(transcript) {
+            setUIState('processing');
+            try {
+                const response = await getNuraResponse(transcript);
+                displayResponse(response); 
+            } catch (error) {
+                console.error("Error getting NURA response:", error);
+                displayResponse("I encountered an error. Please check the connection to my core.");
+            }
+        }
+        
+        function displayResponse(text) {
+            nuraResponseText.textContent = text;
+            setUIState('idle');
+        }
+
+        async function getNuraResponse(userMessage) {
+            const API_URL = '/ask';
+            
+            const response = await fetch(API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: userMessage }),
+            });
+
+            if (!response.ok) {
+                throw new Error(`API Error: ${response.status}`);
+            }
+
+            const data = await response.json();
+            return data.response;
+        }
+        
+        // --- CHANGE 4: Start listening automatically when the script loads ---
+        recognition.start();
+        setUIState('listening');
+    </script>
 </body>
 </html>
