@@ -162,9 +162,9 @@ def takeCommand():
     r = sr.Recognizer()
     with sr.Microphone(device_index=1) as source:
         print("Listening...")
-        r.adjust_for_ambient_noise(source)  # Adjust for ambient noise
+        r.adjust_for_ambient_noise(source)
         try:
-            audio = r.listen(source, timeout=4)  # Set a timeout of 5 seconds
+            audio = r.listen(source, timeout=4)
             print("Recognizing...")
             query = r.recognize_google(audio, language='en-in')
             print(f"User said: {query}")
