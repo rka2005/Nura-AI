@@ -507,6 +507,47 @@ def check_reminders():
 
         time.sleep(30)
 
+def find_and_open(name):
+    """
+    Searches for and opens an application or file by its name.
+    Prioritizes Start Menu and Program Files for efficiency.
+    Returns True if found and opened, False otherwise.
+    """
+    app_name = name.lower().strip()
+    # Remove common words that don't help the search
+    app_name = app_name.replace("application", "").replace("program", "").strip()
+
+    # Define common paths where applications are likely to be found
+    search_paths = [
+        os.path.join(os.getenv('APPDATA'), 'Microsoft\\Windows\\Start Menu\\Programs'),
+        'C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs',
+        'C:\\Program Files',
+        'C:\\Program Files (x86)',
+    ]
+
+    print(f"Searching for '{app_name}' on the system...")
+
+    for path in search_paths:
+        if not os.path.exists(path):
+            continue
+        
+        for root, dirs, files in os.walk(path):
+            for file in files:
+                file_base, file_ext = os.path.splitext(file)
+                if app_name in file_base.lower() and file_ext.lower() in ['.exe', '.lnk']:
+                    try:
+                        full_path = os.path.join(root, file)
+                        speak(f"Found and opening {file_base}")
+                        print(f"Opening: {full_path}")
+                        os.startfile(full_path)
+                        return True
+                    except Exception as e:
+                        print(f"Failed to open {file}: {e}")
+                        speak(f"Sorry, I found {file_base} but could not open it.")
+                        return False
+
+    return False
+
 if __name__ == "__main__":
     wishMe()
     wishtime()
@@ -520,7 +561,7 @@ if __name__ == "__main__":
         if 'good bye' in query or 'goodbye' in query or 'exit' in query or 'bye' in query or "quit" in query or "good night" in query:
             speak("Goodbye Sir!")
             break
-
+        
         # Logic for executing tasks based on query
         elif 'wikipedia' in query:
             speak('Searching Wikipedia....')
@@ -533,14 +574,6 @@ if __name__ == "__main__":
             except wikipedia.exceptions.WikipediaException as e:
                 speak("Sorry, I couldn't find any information.")
                 print(f"An error occurred: {e}")
-
-        elif 'open youtube' in query:
-            speak("Opening YouTube..")
-            webbrowser.open("https://www.youtube.com")
-
-        elif 'open google' in query:
-            speak("Opening Google..")
-            webbrowser.open("https://www.google.com")
 
         elif 'about' in query:
             search_query = query.split('about', 1)[1].strip()
@@ -563,25 +596,29 @@ if __name__ == "__main__":
             else:
                 speak("Sorry, I didn't catch the search query.")
 
+
         elif 'open' in query:
             app_name = query.split('open', 1)[1].strip()
+
             if app_name:
-                speak(f"Opening {app_name}..")
-                try:
-                    search_url = f"https://www.{app_name.replace(' ', '')}.com"
-                    webbrowser.open(search_url)
-                except FileNotFoundError:
-                    speak(f"Sorry, I couldn't find the application named {app_name}.")
+                speak(f"Sure Sir, I will try to open {app_name}.")
+                
+                was_opened = find_and_open(app_name)
+                
+                if not was_opened:
+                    speak(f"I couldn't find '{app_name}' on your system. Shall I search for it online?")
+                    confirmation = takeCommand().lower()
+                    confirm_words = ["yes", "ok", "sure", "search", "open", "go ahead", "yeah", "yup", "alright"]
+
+                    if any(word in confirmation for word in confirm_words):
+                        try:
+                            search_url = f"https://www.{app_name.replace(' ', '')}.com"
+                            webbrowser.open(search_url)
+                            speak(f"Opening {app_name} as a website.")
+                        except Exception as e:
+                            speak(f"Sorry, I couldn't find the application named {app_name}.")
             else:
                 speak("Please specify the application you want to open.")
-
-        elif 'open gmail' in query:
-            speak("Opening Gmail..")
-            webbrowser.open("https://mail.google.com")
-
-        elif 'open stackoverflow' in query:
-            speak("Opening stackoverflow..")
-            webbrowser.open("https://stackoverflow.com")
 
         elif 'play' in query:
             song = query.replace('play', '').strip()
@@ -617,50 +654,21 @@ if __name__ == "__main__":
             strTime = datetime.datetime.now().strftime("%H:%M:%S")
             speak(f"Sir, the time is {strTime}")
 
-        elif 'open code' in query:
-            codePath = "C:\\Users\\Admin\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe"
-            os.startfile(codePath)
-
-        elif 'open whatsapp' in query:
-            speak("Opening whatsapp..")
-            whatsapp_dir = "C:\\Users\\rohit\\Desktop\\whatsapp"
-            os.startfile(whatsapp_dir)
-
         elif 'close whatsapp' in query:
             speak("Sure Sir..")
             close_app('whatsapp')
-
-        elif 'open word' in query:
-            speak("Opening word..")
-            word_dir = "C:\\Users\\rohit\\Desktop\\Computer\\word"
-            os.startfile(word_dir)
 
         elif 'close word' in query:
             speak("Sure Sir..")
             close_app('word')
 
-        elif 'open excel' in query:
-            speak("Opening excel..")
-            excel_dir = "C:\\Users\\rohit\\Desktop\\Computer\\Excel"
-            os.startfile(excel_dir)
-
         elif 'close excel' in query:
             speak("Sure Sir..")
             close_app('excel')
 
-        elif 'open powerpoint' in query:
-            speak("Opening power point..")
-            PowerPoint_dir = "C:\\Users\\rohit\\Desktop\\Computer\\PowerPoint"
-            os.startfile(PowerPoint_dir)
-
         elif 'close powerpoint' in query:
             speak("Sure Sir..")
             close_app('powerpoint')
-
-        elif 'open outlook' in query:
-            speak("Opening outlook..")
-            mail_dir = "C:\\Users\\rohit\\Desktop\\Computer\\Mail"
-            os.startfile(mail_dir)
 
         elif 'close outlook' in query:
             speak("Sure Sir..")

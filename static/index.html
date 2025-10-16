@@ -107,12 +107,10 @@
             background-color: transparent;
             color: var(--primary-color);
             font-size: 1.8rem;
-            /* Clicks are no longer needed, so remove pointer cursor */
             cursor: default; 
             transition: all 0.2s ease;
             margin-top: 100px;
         }
-        /* Remove hover effect as button is not interactive */
         .mic-button:hover { background-color: transparent; transform: none; }
     </style>
 </head>
@@ -168,7 +166,6 @@
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         const recognition = new SpeechRecognition();
         
-        // --- CHANGE 1: Enable continuous listening ---
         recognition.continuous = true;
         recognition.lang = 'en-US';
         recognition.interimResults = false;
@@ -177,8 +174,6 @@
         
         function setUIState(state) {
             magicContainer.className = 'magic-container';
-            
-            // The mic button is never interactive, so we just manage its style based on state
             micButton.classList.remove('disabled');
 
             switch (state) {
@@ -198,7 +193,7 @@
                     statusText.textContent = 'Processing...';
                     micButton.classList.add('disabled');
                     break;
-                case 'speaking': // This state is kept for visual feedback
+                case 'speaking':
                     statusText.textContent = '';
                     micButton.classList.add('disabled');
                     break;
@@ -209,9 +204,6 @@
             }
         }
 
-        // --- CHANGE 2: The mic button click listener is no longer needed ---
-        // micButton.addEventListener('click', () => { ... });
-
         recognition.onstart = () => setUIState('listening');
 
         recognition.onresult = (event) => {
@@ -219,11 +211,11 @@
             isProcessing = true;
 
             const transcript = event.results[event.results.length - 1][0].transcript.trim();
-            if (transcript) { // Only process if the transcript is not empty
+            if (transcript) {
                 userQueryText.textContent = `> ${transcript}`;
                 processTranscript(transcript);
             } else {
-                isProcessing = false; // If transcript is empty, reset flag and continue listening
+                isProcessing = false;
             }
         };
 
@@ -232,11 +224,12 @@
             setUIState('error');
         };
 
-        // --- CHANGE 3: Add an 'onend' handler to automatically restart the listener ---
         recognition.onend = () => {
-            // Only restart if we are not in the middle of processing a command
-            if (!isProcessing) {
+            try {
                 recognition.start();
+            } catch (error) {
+                console.error("Failed to restart recognition:", error);
+                statusText.textContent = 'Mic seems to be off. Please check permissions.';
             }
         };
 
@@ -273,7 +266,7 @@
             return data.response;
         }
         
-        // --- CHANGE 4: Start listening automatically when the script loads ---
+        // Start listening automatically when the script loads
         recognition.start();
         setUIState('listening');
     </script>
