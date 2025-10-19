@@ -17,6 +17,8 @@ from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 import re
 import threading
 import time
+import keyboard
+import pyautogui
 
 load_dotenv()
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
@@ -143,19 +145,41 @@ def close_outlook():
     else:
         speak("Outlook window not found.")
 
-def close_app(app_name):
+def find_and_close_app(spoken_name):
+    """
+    Finds and closes an application by mapping a spoken name to a process name.
+    """
+    # Dictionary mapping keywords to their actual process names
     app_processes = {
         'whatsapp': 'whatsapp.exe',
         'word': 'WINWORD.EXE',
         'excel': 'EXCEL.EXE',
         'powerpoint': 'POWERPNT.EXE',
+        'code': 'Code.exe',        # For Visual Studio Code
+        'chrome': 'chrome.exe',
+        'notepad': 'notepad.exe'
     }
-    if app_name.lower() in app_processes:
-        process_name = app_processes[app_name.lower()]
-        os.system(f"taskkill /f /im {process_name}")
-        print(f"{app_name.capitalize()} closed successfully.")
+
+    spoken_name_lower = spoken_name.lower()
+    process_to_kill = None
+    app_keyword_found = None
+
+    # Loop through the known apps to find a match
+    for keyword, process in app_processes.items():
+        if keyword in spoken_name_lower:
+            process_to_kill = process
+            app_keyword_found = keyword
+            break  # Stop once we find the first match
+
+    if process_to_kill:
+        try:
+            # The /f flag forces the application to close
+            os.system(f"taskkill /f /im {process_to_kill}")
+            speak(f"{app_keyword_found.capitalize()} closed successfully.")
+        except Exception as e:
+            speak(f"I found {app_keyword_found}, but failed to close it. Error: {e}")
     else:
-        print(f"Sorry, could not find a process to close for {app_name}.")
+        speak(f"Sorry, I don't know how to close {spoken_name}. The app may not be in my list.")
 
 
 def takeCommand():
@@ -523,6 +547,7 @@ def find_and_open(name):
         'C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs',
         'C:\\Program Files',
         'C:\\Program Files (x86)',
+        'C:\\Windows\\System32',
     ]
 
     print(f"Searching for '{app_name}' on the system...")
@@ -547,6 +572,18 @@ def find_and_open(name):
                         return False
 
     return False
+
+def open_app_with_windows_search(app_name):
+    try:
+        keyboard.press_and_release('win+s')
+        time.sleep(1)
+        pyautogui.typewrite(app_name)
+        time.sleep(1)
+        keyboard.press_and_release('enter')
+        return True
+    except Exception as e:
+        print(f"Error while opening {app_name}: {e}")
+        return False
 
 if __name__ == "__main__":
     wishMe()
@@ -606,17 +643,21 @@ if __name__ == "__main__":
                 was_opened = find_and_open(app_name)
                 
                 if not was_opened:
-                    speak(f"I couldn't find '{app_name}' on your system. Shall I search for it online?")
-                    confirmation = takeCommand().lower()
-                    confirm_words = ["yes", "ok", "sure", "search", "open", "go ahead", "yeah", "yup", "alright"]
+                    speak(f"I couldn't find '{app_name}' on your system. Trying through Windows Search...")
+                    success = open_app_with_windows_search(app_name)
+                    
+                    if not success:
+                        speak(f"I couldn't find '{app_name}' on your system. Shall I search for it online?")
+                        confirmation = takeCommand().lower()
+                        confirm_words = ["yes", "ok", "sure", "search", "open", "go ahead", "yeah", "yup", "alright"]
 
-                    if any(word in confirmation for word in confirm_words):
-                        try:
-                            search_url = f"https://www.{app_name.replace(' ', '')}.com"
-                            webbrowser.open(search_url)
-                            speak(f"Opening {app_name} as a website.")
-                        except Exception as e:
-                            speak(f"Sorry, I couldn't find the application named {app_name}.")
+                        if any(word in confirmation for word in confirm_words):
+                            try:
+                                search_url = f"https://www.{app_name.replace(' ', '')}.com"
+                                webbrowser.open(search_url)
+                                speak(f"Opening {app_name} as a website.")
+                            except Exception as e:
+                                speak(f"Sorry, I couldn't find the application named {app_name}.")
             else:
                 speak("Please specify the application you want to open.")
 
@@ -654,25 +695,18 @@ if __name__ == "__main__":
             strTime = datetime.datetime.now().strftime("%H:%M:%S")
             speak(f"Sir, the time is {strTime}")
 
-        elif 'close whatsapp' in query:
-            speak("Sure Sir..")
-            close_app('whatsapp')
+        elif 'close' in query:
+            close_app = query.split('close', 1)[1].strip()
+            
+            if not app_name:
+                speak("Please specify which application you would like to close.")
 
-        elif 'close word' in query:
-            speak("Sure Sir..")
-            close_app('word')
+            elif 'outlook' in close_app:
+                speak("Sure Sir, closing Outlook.")
+                close_outlook()
 
-        elif 'close excel' in query:
-            speak("Sure Sir..")
-            close_app('excel')
-
-        elif 'close powerpoint' in query:
-            speak("Sure Sir..")
-            close_app('powerpoint')
-
-        elif 'close outlook' in query:
-            speak("Sure Sir..")
-            close_outlook()
+            else:
+                find_and_close_app(close_app)
 
         elif 'camera' in query:
             speak("Sure Sir, accessing camera..")
