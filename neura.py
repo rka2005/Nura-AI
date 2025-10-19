@@ -20,6 +20,7 @@ import time
 import keyboard
 import pyautogui
 
+
 load_dotenv()
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
@@ -258,9 +259,8 @@ def find_folder(base_path, spoken_name):
     Searches for a folder in base_path that matches spoken_name using normalized comparison.
     Returns full path if found, else None.
     """
-    spoken_norm = re.sub(r'[^a-z0-9]', '', spoken_name.lower())  # remove special chars and lowercase
+    spoken_norm = re.sub(r'[^a-z0-9]', '', spoken_name.lower())
 
-    # List all folders in base_path
     folders = [f for f in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, f))]
 
     matches = []
@@ -272,7 +272,6 @@ def find_folder(base_path, spoken_name):
     if len(matches) == 1:
         return os.path.join(base_path, matches[0])
     elif len(matches) > 1:
-        # Multiple matches, ask user to choose
         speak("I found multiple folders matching your request. Please choose one:")
         for i, f in enumerate(matches, 1):
             speak(f"{i}. {f}")
@@ -282,28 +281,21 @@ def find_folder(base_path, spoken_name):
             index = int(numbers[0]) - 1
             if 0 <= index < len(matches):
                 return os.path.join(base_path, matches[index])
-        # fallback
         return os.path.join(base_path, matches[0])
     else:
-        # No matches
         return None
 
 
 def access_camera():
-    # Open the default camera (index 0)
     camera = cv2.VideoCapture(0)
 
     while True:
-        # Capture frame-by-frame
         ret, frame = camera.read()
 
-        # Display the resulting frame
         cv2.imshow('Camera Feed', frame)
 
-        # Listen for voice command
         command = takeCommand()
 
-        # Process voice command
         if 'capture' in command:
             image_name = "captured_image.jpg"
             cv2.imwrite(image_name, frame)
