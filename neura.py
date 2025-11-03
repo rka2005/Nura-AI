@@ -19,7 +19,7 @@ import threading
 import time
 import keyboard
 import pyautogui
-
+import requests
 
 load_dotenv()
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
@@ -247,10 +247,8 @@ def resolve_folder(folder_input, base_path=None):
                     return os.path.join(base_path, matches[index])
             return os.path.join(base_path, matches[0])
         else:
-            # No match, use folder_input as subfolder of base_path
             return os.path.join(base_path, folder_input)
 
-    # Otherwise, treat as full path
     return folder_input
 
 
@@ -577,6 +575,40 @@ def open_app_with_windows_search(app_name):
         print(f"Error while opening {app_name}: {e}")
         return False
 
+
+def get_weather(city):
+    API_KEY = os.getenv("WEATHER_API")
+    if not API_KEY:
+        return "Weather API key is missing in your environment file."
+
+    BASE_URL = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={API_KEY}&units=metric"
+
+    try:
+        response = requests.get(BASE_URL, timeout=5)
+        data = response.json()
+
+        if data.get("cod") != 200:
+            return f"Sorry, I couldn't find weather information for {city}."
+
+        weather = data["weather"][0]["description"].capitalize()
+        temp = data["main"]["temp"]
+        feels_like = data["main"]["feels_like"]
+        humidity = data["main"]["humidity"]
+        wind_speed = data["wind"]["speed"]
+        country = data["sys"]["country"]
+
+        return (
+            f"The weather in {city.capitalize()}, {country} is {weather}. "
+            f"The temperature is {temp}°C, feels like {feels_like}°C, "
+            f"with humidity at {humidity} percent and wind speed {wind_speed} meters per second."
+        )
+
+    except Exception as e:
+        print(f"Weather error: {e}")
+        return "Sorry, there was an issue fetching the weather data."
+
+
+
 if __name__ == "__main__":
     wishMe()
     wishtime()
@@ -591,7 +623,6 @@ if __name__ == "__main__":
             speak("Goodbye Sir!")
             break
         
-        # Logic for executing tasks based on query
         elif 'wikipedia' in query:
             speak('Searching Wikipedia....')
             query = query.replace("wikipedia", "")
@@ -624,6 +655,41 @@ if __name__ == "__main__":
                 webbrowser.open(search_url)
             else:
                 speak("Sorry, I didn't catch the search query.")
+
+        elif 'weather' in query:
+            city = ""
+            match = re.search(r'weather (in|of|at)?\s*(.*)', query)
+            if match and match.group(2):
+                city = match.group(2).strip()
+
+            if not city:
+                speak("Would you like me to detect your location or do you want to tell the city?")
+                choice = takeCommand().lower()
+
+                if any(word in choice for word in ["detect", "auto", "current", "yes"]):
+                    try:
+                        ipinfo = requests.get("https://ipinfo.io").json()
+                        city = ipinfo.get("city", "")
+                        if city:
+                            speak(f"Detected your location as {city}.")
+                        else:
+                            speak("Sorry, I couldn’t detect your location. Please tell me the city name.")
+                            city = takeCommand().lower()
+                    except Exception as e:
+                        speak("Sorry, I couldn’t detect your location. Please tell me the city name.")
+                        city = takeCommand().lower()
+                else:
+                    speak("Please tell me the location you want.")
+                    city = takeCommand().lower()
+
+            
+            if city:
+                speak(f"Fetching weather information for {city}, please wait...")
+                weather_info = get_weather(city)
+                print(weather_info)
+                speak(weather_info)
+            else:
+                speak("Sorry, I couldn't understand the location you mentioned.")
 
 
         elif 'open' in query:
