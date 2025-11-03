@@ -139,7 +139,7 @@
                         <circle cx="100" cy="100" r="65" class="glow" />
                     </g>
                     <circle cx="100" cy="100" r="5" fill="black" />
-                    <text x="100" y="100" class="center-text">NURA</text>
+                    <text x="100" y="100" class="center-text">NEURA</text>
                 </svg>
             </div>
             <div class="status-display">
@@ -213,6 +213,11 @@
             const transcript = event.results[event.results.length - 1][0].transcript.trim();
             if (transcript) {
                 userQueryText.textContent = `> ${transcript}`;
+                try {
+                    recognition.stop();
+                } catch (e) {
+                    console.warn('recognition.stop() failed:', e);
+                }
                 processTranscript(transcript);
             } else {
                 isProcessing = false;
@@ -222,9 +227,23 @@
         recognition.onerror = (event) => {
             console.error('Speech recognition error:', event.error);
             setUIState('error');
+            // Ensure we aren't left stuck in processing state and try to restart
+            isProcessing = false;
+            // Try to restart after a short delay to give the mic/system a moment
+            setTimeout(() => {
+                try { recognition.start(); } catch (e) { /* ignore */ }
+            }, 500);
         };
 
         recognition.onend = () => {
+            // Only auto-restart if we're not currently processing a transcript.
+            // When we intentionally call recognition.stop() during processing,
+            // onend is fired — we don't want to restart until processing completes.
+            if (isProcessing) {
+                console.debug('onend fired but currently processing; not restarting yet.');
+                return;
+            }
+
             try {
                 recognition.start();
             } catch (error) {
@@ -247,6 +266,15 @@
         function displayResponse(text) {
             nuraResponseText.textContent = text;
             setUIState('idle');
+            // Finished processing — allow recognition to restart listening.
+            isProcessing = false;
+            try {
+                recognition.start();
+            } catch (e) {
+                // If start fails (e.g. permission issue), show a hint in status.
+                console.warn('recognition.start() failed after response:', e);
+                statusText.textContent = 'Unable to restart microphone automatically. Please check permissions.';
+            }
         }
 
         async function getNuraResponse(userMessage) {
