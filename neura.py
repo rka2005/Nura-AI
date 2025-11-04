@@ -895,7 +895,7 @@ if __name__ == "__main__":
             else:
                 speak("Sorry Sir! Can you please repeat again?")
 
-        elif 'music' in query or 'play' in query:
+        elif 'music' in query:
             speak("Sure! From where do you want to play music? I can use YouTube, your local files, or open Spotify.")
             source = takeCommand().lower()
 
