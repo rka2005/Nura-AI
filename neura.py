@@ -20,6 +20,8 @@ import time
 import keyboard
 import pyautogui
 import requests
+import json
+
 
 load_dotenv()
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
@@ -30,7 +32,106 @@ model = genai.GenerativeModel('gemini-2.0-flash')
 engine = pyttsx3.init('sapi5')
 voices = engine.getProperty('voices')
 engine.setProperty('voice', voices[1].id)
-chat_history = []
+
+MEMORY_FILE = "neura_memory.json"
+
+def load_memory():
+    """Load or initialize memory structure."""
+    if os.path.exists(MEMORY_FILE):
+        try:
+            with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                # Ensure required keys exist
+                data.setdefault("preferences", {})
+                data.setdefault("interaction_history", [])
+                data.setdefault("activity_log", [])
+                data.setdefault("llm_history", [])
+                return data
+        except json.JSONDecodeError:
+            # If file corrupted, reset
+            pass
+    # default structure
+    return {
+        "preferences": {},
+        "interaction_history": [],
+        "activity_log": [],
+        "llm_history": []
+    }
+
+def save_memory(mem):
+    """Write memory dict to disk."""
+    try:
+        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(mem, f, indent=4, ensure_ascii=False)
+    except Exception as e:
+        print(f"[Memory save error]: {e}")
+
+memory = load_memory()
+
+def llm_history_to_pairs():
+    pairs = []
+    for msg in memory.get("llm_history", []):
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if role == "user":
+            pairs.append(("user", content))
+        else:
+            pairs.append(("bot", content))
+    return pairs
+
+def append_llm_history(role, content):
+    memory["llm_history"].append({"role": role, "content": content})
+    save_memory(memory)
+def remember_interaction(user_input, neura_response):
+    memory["interaction_history"].append({
+        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "user": user_input,
+        "neura": neura_response
+    })
+    save_memory(memory)
+
+def update_preference(key, value):
+    # If value is list-like or multiple preferences, store as list
+    prev = memory["preferences"].get(key)
+    if prev:
+        # Avoid duplicates for simple strings
+        if isinstance(prev, list):
+            if value not in prev:
+                prev.append(value)
+                memory["preferences"][key] = prev
+        else:
+            if prev != value:
+                memory["preferences"][key] = value
+    else:
+        # If key likely to be multiple (like song_preferences), prefer list
+        if key.endswith("_preferences") or key.endswith("songs"):
+            memory["preferences"][key] = [value]
+        else:
+            memory["preferences"][key] = value
+    save_memory(memory)
+
+def log_activity(action):
+    memory["activity_log"].append({
+        "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "action": action
+    })
+    save_memory(memory)
+
+def recall_preference(key, default=None):
+    return memory["preferences"].get(key, default)
+
+def analyze_memory_on_start():
+    """Run light analysis on startup and optionally speak summary."""
+    prefs = memory.get("preferences", {})
+    interactions = memory.get("interaction_history", [])
+    if prefs:
+        print("🔁 Loaded preferences:")
+        for k, v in prefs.items():
+            print(f"  - {k}: {v}")
+    if interactions:
+        print(f"🗂️  Interaction history length: {len(interactions)}")
+        last = interactions[-1]
+        print(f"  Last: {last.get('timestamp')} | user: {last.get('user')}")
 
 
 def speak(audio):
@@ -53,7 +154,15 @@ def wishtime():
         speak("Good Night!")
     speak("I am Neura. Please tell, how may I help you?")
 
-def chat_with_ai(prompt, chat_history=[]):
+def chat_with_ai(prompt, chat_history_pairs=None):
+    """
+    prompt: user string
+    chat_history_pairs: list of tuples [("user", "..."), ("bot","..."), ...]
+    Returns: (reply_text, updated_chat_history_pairs)
+    """
+    if chat_history_pairs is None:
+        chat_history_pairs = llm_history_to_pairs()
+
     try:
         # ✅ Try Gemini first
         control_instruction = (
@@ -64,16 +173,18 @@ def chat_with_ai(prompt, chat_history=[]):
         full_prompt = f"{control_instruction}\n\nUser: {prompt}"
 
         # Ensure chat history works for Gemini
-        chat = model.start_chat(history=chat_history)
+        chat = model.start_chat(history=chat_history_pairs)
         response = chat.send_message(full_prompt)
 
         # Check if Gemini gave a valid response
         if not response.text or response.text.strip() == "" or "error" in response.text.lower():
             raise ValueError("Gemini response invalid")
 
-        chat_history.append(("user", prompt))
-        chat_history.append(("bot", response.text))
-        return response.text, chat_history
+        chat_history_pairs.append(("user", prompt))
+        chat_history_pairs.append(("bot", response.text))
+        append_llm_history("user", prompt)
+        append_llm_history("assistant", response.text)
+        return response.text, chat_history_pairs
 
     except Exception as e:
         print(f"[Gemini failed: {e}] ⚡ Switching to Groq...")
@@ -81,7 +192,7 @@ def chat_with_ai(prompt, chat_history=[]):
         # ✅ Fallback to Groq
         try:
             messages = []
-            for role, content in chat_history:
+            for role, content in chat_history_pairs:
                 messages.append({
                     "role": "user" if role == "user" else "assistant",
                     "content": content
@@ -97,17 +208,22 @@ def chat_with_ai(prompt, chat_history=[]):
 
             reply = response.choices[0].message.content
 
-            chat_history.append(("user", prompt))
-            chat_history.append(("bot", reply))
+            chat_history_pairs.append(("user", prompt))
+            chat_history_pairs.append(("bot", reply))
+            append_llm_history("user", prompt)
+            append_llm_history("assistant", reply)
 
-            return reply, chat_history
+            return reply, chat_history_pairs
 
         except Exception as e2:
-            return f"Both Gemini and Groq failed: {e2}", chat_history
+            return f"Both Gemini and Groq failed: {e2}", chat_history_pairs
 
 
 def ask_neura(user_message):
-    global chat_history
+    """
+    Handles conversational queries and memory updates.
+    """
+
     user_message = user_message.lower()
 
     if not user_message:
@@ -129,10 +245,40 @@ def ask_neura(user_message):
     elif "time" in user_message:
         current_time = datetime.datetime.now().strftime("%H:%M:%S")
         response = f"The time is {current_time}"
+    elif re.search(r"\bi like\b", user_message) or re.search(r"\bi prefer\b", user_message):
+        m = re.search(r"i like (.+)", user_message) or re.search(r"i prefer (.+)", user_message)
+        if m:
+            pref_text = m.group(1).strip()
+            if any(word in pref_text for word in ["music", "song", "songs", "genre", "rock", "lofi", "pop", "romantic", "classical"]):
+                existing = memory["preferences"].get("song_preferences", [])
+                if isinstance(existing, list):
+                    if pref_text not in existing:
+                        existing.append(pref_text)
+                        memory["preferences"]["song_preferences"] = existing
+                else:
+                    memory["preferences"]["song_preferences"] = [existing, pref_text] if existing else [pref_text]
+                save_memory(memory)
+                response = f"Got it — I've noted you like {pref_text} music."
+            else:
+                update_preference_key = "general_likes"
+                existing = memory["preferences"].get(update_preference_key, [])
+                if isinstance(existing, list):
+                    if pref_text not in existing:
+                        existing.append(pref_text)
+                        memory["preferences"][update_preference_key] = existing
+                else:
+                    memory["preferences"][update_preference_key] = [pref_text]
+                save_memory(memory)
+                response = f"Noted that you like {pref_text}."
+        else:
+            response = "Tell me what you like, Sir."
     else:
         speak("Let me think...")
-        response, chat_history = chat_with_ai(user_message, chat_history)
-        print("Nura:",response)
+        response, _ = chat_with_ai(user_message)
+        print("Nura:", response)
+
+    remember_interaction(user_message, response)
+    log_activity(f"Handled query: {user_message}")
 
     speak(response)
     return response
@@ -150,13 +296,12 @@ def find_and_close_app(spoken_name):
     """
     Finds and closes an application by mapping a spoken name to a process name.
     """
-    # Dictionary mapping keywords to their actual process names
     app_processes = {
         'whatsapp': 'whatsapp.exe',
         'word': 'WINWORD.EXE',
         'excel': 'EXCEL.EXE',
         'powerpoint': 'POWERPNT.EXE',
-        'code': 'Code.exe',        # For Visual Studio Code
+        'code': 'Code.exe',
         'chrome': 'chrome.exe',
         'notepad': 'notepad.exe'
     }
@@ -165,16 +310,14 @@ def find_and_close_app(spoken_name):
     process_to_kill = None
     app_keyword_found = None
 
-    # Loop through the known apps to find a match
     for keyword, process in app_processes.items():
         if keyword in spoken_name_lower:
             process_to_kill = process
             app_keyword_found = keyword
-            break  # Stop once we find the first match
+            break
 
     if process_to_kill:
         try:
-            # The /f flag forces the application to close
             os.system(f"taskkill /f /im {process_to_kill}")
             speak(f"{app_keyword_found.capitalize()} closed successfully.")
         except Exception as e:
@@ -612,6 +755,17 @@ def get_weather(city):
 if __name__ == "__main__":
     wishMe()
     wishtime()
+    analyze_memory_on_start()
+
+    pref_city = recall_preference("weather_city")
+    pref_songs = memory["preferences"].get("song_preferences")
+    if pref_city:
+        speak(f"I remember your preferred weather city is {pref_city}.")
+    if pref_songs:
+        if isinstance(pref_songs, list):
+            speak(f"You've told me you like {', '.join(pref_songs[:3])}.")
+        else:
+            speak(f"You've told me you like {pref_songs} music.")
 
     reminder_thread = threading.Thread(target=check_reminders, daemon=True)
     reminder_thread.start()
@@ -625,15 +779,18 @@ if __name__ == "__main__":
         
         elif 'wikipedia' in query:
             speak('Searching Wikipedia....')
-            query = query.replace("wikipedia", "")
+            query = query.replace("wikipedia", "").strip()
             try:
                 results = wikipedia.summary(query, sentences=3)
                 speak("According to Wikipedia")
                 print(results)
                 speak(results)
+                remember_interaction(query, results)
+                log_activity(f"Wikipedia search: {query}")
             except wikipedia.exceptions.WikipediaException as e:
                 speak("Sorry, I couldn't find any information.")
                 print(f"An error occurred: {e}")
+                remember_interaction(query, "wikipedia search failed")
 
         elif 'about' in query:
             search_query = query.split('about', 1)[1].strip()
@@ -642,9 +799,11 @@ if __name__ == "__main__":
                 results = wikipedia.summary(search_query, sentences=3)
                 print(results)
                 speak(results)
+                remember_interaction(query, results)
             except wikipedia.exceptions.WikipediaException as e:
                 speak("Sorry, I couldn't find any information.")
                 print(f"An error occurred: {e}")
+                remember_interaction(query, "about search failed")
 
         elif 'search' in query or 'find' in query:
             search_query = query.split('search', 1)[1].strip() if 'search' in query else query.split('find', 1)[1].strip()
@@ -653,6 +812,8 @@ if __name__ == "__main__":
                 search_url = "https://www.google.com/search?q=" + '+'.join(search_query)
                 speak("Here are the search results for " + search_query)
                 webbrowser.open(search_url)
+                remember_interaction(query, f"Opened google search for {search_query}")
+                log_activity(f"Search: {search_query}")
             else:
                 speak("Sorry, I didn't catch the search query.")
 
@@ -684,10 +845,11 @@ if __name__ == "__main__":
 
             
             if city:
-                speak(f"Fetching weather information for {city}, please wait...")
+                speak(f"Detecting weather information for {city}, please wait...")
                 weather_info = get_weather(city)
                 print(weather_info)
                 speak(weather_info)
+                remember_interaction(query, weather_info)
             else:
                 speak("Sorry, I couldn't understand the location you mentioned.")
 
@@ -714,44 +876,93 @@ if __name__ == "__main__":
                                 search_url = f"https://www.{app_name.replace(' ', '')}.com"
                                 webbrowser.open(search_url)
                                 speak(f"Opening {app_name} as a website.")
+                                remember_interaction(query, f"Opened website for {app_name}")
                             except Exception as e:
                                 speak(f"Sorry, I couldn't find the application named {app_name}.")
             else:
                 speak("Please specify the application you want to open.")
 
-        elif 'play' in query:
+        elif 'song' in query:
             song = query.replace('play', '').strip()
             if song:
                 speak(f"Playing {song}")
                 pywhatkit.playonyt(song)
+                update_preference("last_played_song", song)
+                if any(x in song for x in ["lofi", "romantic", "classical", "rock", "pop", "jazz"]):
+                    update_preference("song_preferences", song)
+                remember_interaction(query, f"Played {song}")
+                log_activity(f"Played song: {song}")
             else:
                 speak("Sorry Sir! Can you please repeat again?")
 
-        elif 'play a music' in query or 'song' in query:
-            speak("Sure! From where do you want to play music?")
+        elif 'music' in query or 'play' in query:
+            speak("Sure! From where do you want to play music? I can use YouTube, your local files, or open Spotify.")
             source = takeCommand().lower()
-            if'YouTube' or 'youtube' in source:
-                speak("Sure! Please tell me what you want to play?")
+
+            if not source:
+                speak("I didn't catch that. I'll use YouTube by default.")
+                source = 'youtube'
+
+            if 'youtube' in source:
+                speak("What would you like me to play on YouTube?")
                 yt_name = takeCommand()
                 if yt_name:
                     speak(f"Playing {yt_name} on YouTube.")
-                    pywhatkit.playonyt(yt_name)
+                    try:
+                        pywhatkit.playonyt(yt_name)
+                        update_preference("last_played_song", yt_name)
+                        remember_interaction(query, f"Played {yt_name} on YouTube")
+                        log_activity(f"Played on YouTube: {yt_name}")
+                    except Exception as e:
+                        speak("Sorry, I couldn't play that on YouTube.")
+                        print(f"YouTube play error: {e}")
                 else:
-                    speak("Sorry, I didn't catch the name.")
+                    last = recall_preference("last_played_song")
+                    if last:
+                        speak(f"I couldn't hear the name. Playing your last song: {last}.")
+                        try:
+                            pywhatkit.playonyt(last)
+                            log_activity(f"Played last preference on YouTube: {last}")
+                        except Exception as e:
+                            speak("Sorry, I couldn't play your last song on YouTube.")
+                            print(f"YouTube play error (fallback): {e}")
+                    else:
+                        speak("I don't have a record of your last song. Please tell me what to play.")
 
-            elif 'desktop' in source:
-                music_dir = 'D:\\Music'
-                songs = os.listdir(music_dir)
-                print(songs)
-                os.startfile(os.path.join(music_dir, songs[1]))
-            
-            else: 
-                speak("Sorry sir, I cannot understand.")
-                continue
+            elif any(x in source for x in ['desktop', 'local', 'computer', 'file', 'folder']):
+                speak("Looking for music on your computer. Please tell me the folder name or say 'music' to use your Music folder.")
+                folder_input = takeCommand()
+                base = os.path.expanduser("~")
+                folder_path = resolve_folder(folder_input or 'music', base)
+
+                if not os.path.exists(folder_path):
+                    speak(f"Folder '{folder_path}' not found.")
+                else:
+                    songs = [f for f in os.listdir(folder_path) if f.lower().endswith(('.mp3', '.wav', '.m4a', '.flac'))]
+                    if songs:
+                        speak(f"Found {len(songs)} songs. Playing the first one.")
+                        try:
+                            os.startfile(os.path.join(folder_path, songs[0]))
+                            update_preference("last_played_song", songs[0])
+                            remember_interaction(query, f"Played local song {songs[0]}")
+                            log_activity(f"Played local song: {songs[0]}")
+                        except Exception as e:
+                            speak("Sorry, I couldn't play that file.")
+                            print(f"Local play error: {e}")
+                    else:
+                        speak("No audio files found in that folder.")
+
+            elif 'spotify' in source:
+                speak("I can't control Spotify directly yet. I can open Spotify for you.")
+                find_and_open('spotify')
+
+            else:
+                speak("Sorry, I couldn't understand the source. Try saying 'YouTube', 'desktop', or 'Spotify'.")
 
         elif 'time' in query:
             strTime = datetime.datetime.now().strftime("%H:%M:%S")
             speak(f"Sir, the time is {strTime}")
+            remember_interaction(query, strTime)
 
         elif 'close' in query:
             close_app = query.split('close', 1)[1].strip()
@@ -773,14 +984,22 @@ if __name__ == "__main__":
         elif 'picture' in query:
             speak ("Sure Sir, opening the image..")
             photo_dir1 = 'Libraries\\Camera Roll'
-            photos = os.listdir(photo_dir1)
-            os.startfile(os.path.join(photo_dir1, photos[0]))
+            try:
+                photos = os.listdir(photo_dir1)
+                os.startfile(os.path.join(photo_dir1, photos[0]))
+                remember_interaction(query, f"Opened image {photos[0]}")
+            except Exception:
+                speak("Could not access pictures folder.")
 
         elif 'pictures' in query:
             speak ("Sure Sir, opening the image..")
             photo_dir = 'D:\\Pictures\\Photos'
-            photos = os.listdir(photo_dir)
-            os.startfile(os.path.join(photo_dir, photos[0]))
+            try:
+                photos = os.listdir(photo_dir)
+                os.startfile(os.path.join(photo_dir, photos[0]))
+                remember_interaction(query, f"Opened image {photos[0]}")
+            except Exception:
+                speak("Could not access pictures folder.")
 
         elif 'volume up' in query:
             change_volume("up")
@@ -829,5 +1048,17 @@ if __name__ == "__main__":
         elif 'reminder' in query:
             set_reminder()
 
+        elif 'clear memory' in query or 'reset memory' in query:
+            memory.clear()
+            memory.update({
+                "preferences": {},
+                "interaction_history": [],
+                "activity_log": [],
+                "llm_history": []
+            })
+            save_memory(memory)
+            speak("All stored memories have been cleared, Sir.")
+            log_activity("Cleared memory by user command")
+        
         else:
             ask_neura(query)
