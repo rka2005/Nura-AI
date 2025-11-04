@@ -21,6 +21,7 @@ import keyboard
 import pyautogui
 import requests
 import json
+import pyjokes
 
 
 load_dotenv()
@@ -236,6 +237,8 @@ def ask_neura(user_message):
         response = "Hello Sir! It's good to hear from you."
     elif "who are you" in user_message:
         response = "I am Neura, your personal AI assistant."
+    elif "what can you do" in user_message:
+        response = "I can help you with various tasks like answering questions, managing files, setting reminders, and more."
     elif "your name" in user_message:
         response = "My name is Neura. I was created to help you."
     elif "rohit" in user_message:
@@ -1048,6 +1051,11 @@ if __name__ == "__main__":
         elif 'reminder' in query:
             set_reminder()
 
+        elif 'joke' in query or 'jokes' in query:
+            joke = pyjokes.get_joke()
+            speak(joke)
+            remember_interaction(query, joke)
+        
         elif 'clear memory' in query or 'reset memory' in query:
             memory.clear()
             memory.update({
