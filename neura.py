@@ -715,15 +715,20 @@ def open_app_with_windows_search(app_name):
         time.sleep(1)
         pyautogui.typewrite(app_name)
         time.sleep(1.5) 
-
-        web_search_result = pyautogui.locateOnScreen('web_icon.png', confidence=0.8)
-
-        if web_search_result is not None:
-            keyboard.press_and_release('esc')
-            return False
-        else:
+        
+        if app_name == "clipchamp": 
             keyboard.press_and_release('enter')
             return True
+        
+        else:
+            web_search_result = pyautogui.locateOnScreen('web_icon.png', confidence=0.8)
+
+            if web_search_result is not None:
+                keyboard.press_and_release('esc')
+                return False
+            else:
+                keyboard.press_and_release('enter')
+                return True
 
     except Exception as e:
         print(f"Error: {e}")
@@ -875,14 +880,14 @@ if __name__ == "__main__":
                 was_opened = find_and_open(app_name)
                 
                 if not was_opened:
-                    speak(f"I couldn't find '{app_name}' on your system. Trying through Windows Search...")
+                    speak(f"Sorry sir! I couldn't find '{app_name}' on your system. I am trying another way...")
                     success = open_app_with_windows_search(app_name)
                     
                     if not success:
                         try:
                             search_url = f"https://www.{app_name.replace(' ', '')}.com"
                             webbrowser.open(search_url)
-                            speak(f"Opening {app_name} as a website.")
+                            speak(f"Opening {app_name}")
                             remember_interaction(query, f"Opened website for {app_name}")
                         except Exception as e:
                             speak(f"Sorry, I couldn't find the application named {app_name}.")
