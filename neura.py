@@ -714,11 +714,20 @@ def open_app_with_windows_search(app_name):
         keyboard.press_and_release('win+s')
         time.sleep(1)
         pyautogui.typewrite(app_name)
-        time.sleep(1)
-        keyboard.press_and_release('enter')
-        return True
+        time.sleep(1.5) 
+
+        web_search_result = pyautogui.locateOnScreen('web_icon.png', confidence=0.8)
+
+        if web_search_result is not None:
+            keyboard.press_and_release('esc')
+            return False
+        else:
+            keyboard.press_and_release('enter')
+            return True
+
     except Exception as e:
-        print(f"Error while opening {app_name}: {e}")
+        print(f"Error: {e}")
+        keyboard.press_and_release('esc')
         return False
 
 
@@ -870,18 +879,13 @@ if __name__ == "__main__":
                     success = open_app_with_windows_search(app_name)
                     
                     if not success:
-                        speak(f"I couldn't find '{app_name}' on your system. Shall I search for it online?")
-                        confirmation = takeCommand().lower()
-                        confirm_words = ["yes", "ok", "sure", "search", "open", "go ahead", "yeah", "yup", "alright"]
-
-                        if any(word in confirmation for word in confirm_words):
-                            try:
-                                search_url = f"https://www.{app_name.replace(' ', '')}.com"
-                                webbrowser.open(search_url)
-                                speak(f"Opening {app_name} as a website.")
-                                remember_interaction(query, f"Opened website for {app_name}")
-                            except Exception as e:
-                                speak(f"Sorry, I couldn't find the application named {app_name}.")
+                        try:
+                            search_url = f"https://www.{app_name.replace(' ', '')}.com"
+                            webbrowser.open(search_url)
+                            speak(f"Opening {app_name} as a website.")
+                            remember_interaction(query, f"Opened website for {app_name}")
+                        except Exception as e:
+                            speak(f"Sorry, I couldn't find the application named {app_name}.")
             else:
                 speak("Please specify the application you want to open.")
 
