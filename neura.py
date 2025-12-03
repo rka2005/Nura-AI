@@ -917,8 +917,20 @@ if __name__ == "__main__":
 
             if 'youtube' in source:
                 speak("What would you like me to play on YouTube?")
-                yt_name = takeCommand()
-                if yt_name:
+                yt_name = takeCommand().lower().strip()
+                if "previous" in yt_name:
+                    last = recall_preference("last_played_song")
+                    if last:
+                        speak(f"Sure sir! Playing your last song: {last}.")
+                        try:
+                            pywhatkit.playonyt(last)
+                            log_activity(f"Played last preference on YouTube: {last}")
+                        except Exception as e:
+                            speak("Sorry, I couldn't play your last song on YouTube.")
+                            print(f"YouTube play error (fallback): {e}")
+                    else:
+                        speak("I don't have a record of your last song. Please tell me what to play.")
+                elif yt_name:
                     speak(f"Playing {yt_name} on YouTube.")
                     try:
                         pywhatkit.playonyt(yt_name)
