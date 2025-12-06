@@ -468,7 +468,7 @@ def main():
     try:
         # AI.py is assumed to be in the same folder as frontend.py
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        ai_script = os.path.join(script_dir, "nura.py")
+        ai_script = os.path.join(script_dir, "neura.py")
 
         ai_process = subprocess.Popen([sys.executable, ai_script])
         print("AI backend started:", ai_script)
