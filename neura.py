@@ -457,6 +457,12 @@ def find_folder(base_path, spoken_name):
 
 
 def access_camera():
+    global SCREEN_ACCESS_ALLOWED
+
+    if not SCREEN_ACCESS_ALLOWED:
+        speak("Screen access is disabled. Please say allow screen access first.")
+        return
+
     camera = cv2.VideoCapture(0)
 
     while True:
@@ -794,9 +800,37 @@ def get_weather(city):
         return "Sorry, there was an issue fetching the weather data."
 
 
+# ---------- MEDIA CONTROLS ----------
+def pause_or_resume_media():
+    keyboard.press_and_release('play/pause media')
+    speak("Media playback toggled.")
+
+def next_media():
+    keyboard.press_and_release('next track')
+    speak("Playing next track.")
+
+def previous_media():
+    keyboard.press_and_release('previous track')
+    speak("Playing previous track.")
+
+def detect_media_activity():
+    """
+    Detect if media is playing using system heuristics.
+    """
+    try:
+        sessions = AudioUtilities.GetAllSessions()
+        for session in sessions:
+            if session.State == 1:  # Active
+                if session.Process:
+                    return f"Media is playing from {session.Process.name()}"
+        return "No active media playback detected."
+    except Exception:
+        return "Unable to detect media status."
+
+
 
 if __name__ == "__main__":
-    
+
     # ---------- RESET CHAT SESSION ----------
     with open(CHAT_BRIDGE_FILE, "w", encoding="utf-8") as f:
         json.dump([], f)
@@ -941,6 +975,22 @@ if __name__ == "__main__":
             else:
                 speak("Please specify the application you want to open.")
 
+        elif "pause music" in query or "pause song" in query:
+            pause_or_resume_media()
+
+        elif "resume music" in query or "play music" in query:
+            pause_or_resume_media()
+
+        elif "next song" in query or "next track" in query:
+            next_media()
+
+        elif "previous song" in query or "previous track" in query:
+            previous_media()
+
+        elif "what is playing" in query or "what's playing" in query:
+            status = detect_media_activity()
+            speak(status)
+
         elif 'song' in query:
             song = query.replace('play', '').strip()
             if song:
@@ -1047,6 +1097,15 @@ if __name__ == "__main__":
 
             else:
                 find_and_close_app(close_app)
+
+        elif "allow screen access" in query:
+            global SCREEN_ACCESS_ALLOWED
+            SCREEN_ACCESS_ALLOWED = True
+            speak("Screen access permission granted.")
+
+        elif "stop screen access" in query or "disable screen access" in query:
+            SCREEN_ACCESS_ALLOWED = False
+            speak("Screen access permission revoked.")
 
         elif 'camera' in query:
             speak("Sure Sir, accessing camera..")
