@@ -55,7 +55,7 @@ def send_to_frontend(role, message):
         data.append(payload)
 
         with open(CHAT_BRIDGE_FILE, "w", encoding="utf-8") as f:
-            json.dump(data[-50:], f, indent=2)
+            json.dump(data, f, indent=2, ensure_ascii=False)
 
     except Exception as e:
         print("Chat bridge error:", e)
@@ -796,6 +796,11 @@ def get_weather(city):
 
 
 if __name__ == "__main__":
+    
+    # ---------- RESET CHAT SESSION ----------
+    with open(CHAT_BRIDGE_FILE, "w", encoding="utf-8") as f:
+        json.dump([], f)
+
     # Print startup banner once
     art = text2art("Neura", font='block', chr_ignore=True)
     print("\n" + art + "\n")
