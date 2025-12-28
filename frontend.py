@@ -13,6 +13,7 @@ import json
 
 # ------------- GLOBALS THAT WILL BE UPDATED -------------
 CHAT_MESSAGES = deque(maxlen=25)
+CHAT_SCROLL_OFFSET = 0
 CHAT_BRIDGE_FILE = "chat_bridge.json"
 LAST_CHAT_LEN = 0
 
@@ -566,7 +567,7 @@ def draw_analytics(surface, t, amplitude, fps):
 
 
 def fetch_chat_from_backend():
-    global LAST_CHAT_LEN
+    global LAST_CHAT_LEN, CHAT_SCROLL_OFFSET
 
     if not os.path.exists(CHAT_BRIDGE_FILE):
         return
@@ -580,6 +581,7 @@ def fetch_chat_from_backend():
             for msg in new_msgs:
                 prefix = "You" if msg["role"] == "user" else "Neura"
                 CHAT_MESSAGES.append(f"{prefix}: {msg['message']}")
+                CHAT_SCROLL_OFFSET = 0
             LAST_CHAT_LEN = len(data)
 
     except Exception as e:
@@ -617,7 +619,9 @@ def draw_chat_panel(surface):
 
     # Compute how many lines fit vertically
     max_lines = max(0, (panel_h - inner_pad * 2) // line_h)
-    start_idx = max(0, len(all_lines) - max_lines)
+    max_scroll = max(0, len(all_lines) - max_lines)
+    scroll = min(CHAT_SCROLL_OFFSET, max_scroll)
+    start_idx = max(0, len(all_lines) - max_lines - scroll)
 
     # Clip drawing to panel to prevent overflow
     prev_clip = surface.get_clip()
@@ -636,7 +640,7 @@ def draw_chat_panel(surface):
 def main():
     pygame.init()
 
-    global SPHERE_RADIUS, current_theme, ULTRA_BOLD, last_amplitude, VOICE_PULSES
+    global SPHERE_RADIUS, current_theme, ULTRA_BOLD, last_amplitude, VOICE_PULSES, CHAT_SCROLL_OFFSET
 
     # ---- START SIDD AI BACKEND (AI.py) ----
     ai_process = None
@@ -703,6 +707,18 @@ def main():
                 cam_surface = None
 
             for event in pygame.event.get():
+                if event.type == pygame.MOUSEWHEEL:
+                    mx, my = pygame.mouse.get_pos()
+
+                    panel_x = 20
+                    panel_y = 20 + 110 + 12
+                    panel_w = 300
+                    panel_h = int(HEIGHT * 0.5)
+
+                    if panel_x <= mx <= panel_x + panel_w and panel_y <= my <= panel_y + panel_h:
+                        CHAT_SCROLL_OFFSET -= event.y * 3
+                        CHAT_SCROLL_OFFSET = max(0, CHAT_SCROLL_OFFSET)
+
                 if event.type == pygame.QUIT:
                     running = False
 
