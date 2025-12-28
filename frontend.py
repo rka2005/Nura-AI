@@ -7,8 +7,15 @@ import cv2
 import os
 import sys
 import subprocess
+import psutil
+from collections import deque
+import json
 
 # ------------- GLOBALS THAT WILL BE UPDATED -------------
+CHAT_MESSAGES = deque(maxlen=25)
+CHAT_BRIDGE_FILE = "chat_bridge.json"
+LAST_CHAT_LEN = 0
+
 WIDTH, HEIGHT = 500, 500
 CENTER_X, CENTER_Y = WIDTH // 2, HEIGHT // 2
 
@@ -30,6 +37,11 @@ CHUNK = 1024
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
 RATE = 44100
+
+CPU_GRAPH = []
+RAM_GRAPH = []
+GPU_GRAPH = []
+GRAPH_MAX_POINTS = 120
 
 # --------- THEMES (for HUD inner colors) ---------
 # Outer HUD stays cyan; only inner HUD colors change
@@ -172,6 +184,39 @@ def mix_color(c1, c2, t):
         lerp(c1[1], c2[1], t),
         lerp(c1[2], c2[2], t),
     )
+
+
+# -------------------- TEXT WRAP UTILITY --------------------
+def wrap_text(font, text, max_width):
+    lines = []
+    words = text.split(" ")
+    current = ""
+
+    for word in words:
+        test = word if not current else current + " " + word
+        if font.size(test)[0] <= max_width:
+            current = test
+        else:
+            if current:
+                lines.append(current)
+            # If a single word exceeds max_width, hard-wrap it
+            if font.size(word)[0] > max_width:
+                chunk = ""
+                for ch in word:
+                    test_chunk = chunk + ch
+                    if font.size(test_chunk)[0] <= max_width:
+                        chunk = test_chunk
+                    else:
+                        if chunk:
+                            lines.append(chunk)
+                        chunk = ch
+                current = chunk
+            else:
+                current = word
+
+    if current:
+        lines.append(current)
+    return lines
 
 
 # -------------------- ADVANCED JARVIS HUD --------------------
@@ -422,39 +467,169 @@ def draw_analytics(surface, t, amplitude, fps):
     label = font_tiny.render("VOICE LEVEL", True, text_color)
     surface.blit(label, (bar_x, bar_y - 16))
 
-    # ---------- BOTTOM-RIGHT MINI BAR GRAPH ----------
-    graph_w, graph_h = 220, 120
-    graph_x = WIDTH - graph_w - 20
-    graph_y = HEIGHT - graph_h - 30
+        # ---------- BOTTOM-RIGHT SYSTEM PERFORMANCE GRAPH ----------
+        # ---------- TASK MANAGER STYLE PERFORMANCE PANEL ----------
+    panel_w, panel_h = 300, 240
+    panel_x = WIDTH - panel_w - 20
+    panel_y = HEIGHT - panel_h - 30
 
-    graph_rect = pygame.Rect(graph_x, graph_y, graph_w, graph_h)
-    pygame.draw.rect(surface, panel_bg, graph_rect, border_radius=8)
-    pygame.draw.rect(surface, panel_border, graph_rect, 1, border_radius=8)
+    perf_rect = pygame.Rect(panel_x, panel_y, panel_w, panel_h)
+    pygame.draw.rect(surface, panel_bg, perf_rect, border_radius=8)
+    pygame.draw.rect(surface, panel_border, perf_rect, 1, border_radius=8)
 
-    # bars inside
-    num_bars = 12
-    gap = 4
-    bar_width = (graph_w - (num_bars + 1) * gap) // num_bars
-    time_factor = t * 0.004
+    # -------- Collect System Stats --------
+    cpu_usage = psutil.cpu_percent(interval=0)
+    ram_info = psutil.virtual_memory()
+    ram_usage = ram_info.percent
 
-    quiet_color = theme["quiet_core"]
-    loud_color = theme["loud_core"]
+    # GPU temperature if available
+    try:
+        gpu_temp = psutil.sensors_temperatures().get("gpu", None)
+        gpu_temp = gpu_temp[0].current if gpu_temp else None
+    except:
+        gpu_temp = None
 
-    for i in range(num_bars):
-        phase = time_factor + i * 0.6
-        base_wave = (math.sin(phase) + 1) / 2  # 0..1
-        # scale by amplitude
-        value = (0.25 + 0.75 * amp_visual) * base_wave
-        h = int((graph_h - 40) * value)
-        bx = graph_x + gap + i * (bar_width + gap)
-        by = graph_y + graph_h - 10 - h
+    # -------- Update Graph Buffers --------
+    CPU_GRAPH.append(cpu_usage)
+    RAM_GRAPH.append(ram_usage)
+    if gpu_temp:
+        GPU_GRAPH.append(gpu_temp)
+    else:
+        GPU_GRAPH.append(0)
 
-        color = mix_color(quiet_color, loud_color, value)
-        pygame.draw.rect(surface, color, (bx, by, bar_width, h), border_radius=4)
+    # Trim graphs to max length
+    CPU_GRAPH[:] = CPU_GRAPH[-GRAPH_MAX_POINTS:]
+    RAM_GRAPH[:] = RAM_GRAPH[-GRAPH_MAX_POINTS:]
+    GPU_GRAPH[:] = GPU_GRAPH[-GRAPH_MAX_POINTS:]
 
-    # label
-    g_label = font_tiny.render("REAL-TIME SIGNAL", True, text_color)
-    surface.blit(g_label, (graph_x + 8, graph_y + 6))
+    # -------- Draw Grid Like Task Manager --------
+    grid_cols = 12
+    grid_rows = 6
+    cell_w = panel_w / grid_cols
+    cell_h = panel_h / grid_rows
+
+    for i in range(grid_cols):
+        x = panel_x + i * cell_w
+        pygame.draw.line(surface, (30, 45, 70), (x, panel_y), (x, panel_y + panel_h), 1)
+
+    for j in range(grid_rows):
+        y = panel_y + j * cell_h
+        pygame.draw.line(surface, (30, 45, 70), (panel_x, y), (panel_x + panel_w, y), 1)
+
+    # -------- Helper: Draw a Line Graph (clipped to panel) --------
+    def draw_line_graph(values, color, section_offset, section_height):
+        """
+        Draw a line graph within a specific section of the panel.
+        section_offset: y-offset from panel_y where this section starts
+        section_height: height allocated for this section
+        """
+        if len(values) < 2:
+            return
+        
+        # Define the section bounds
+        section_y = panel_y + section_offset
+        section_bottom = section_y + section_height
+        
+        prev = None
+        for i, v in enumerate(values):
+            x = panel_x + 2 + (i / GRAPH_MAX_POINTS) * (panel_w - 4)
+            # Scale value (0-100) to section height, baseline at bottom
+            y = section_bottom - (v / 100.0) * section_height
+            # Clamp y to section bounds
+            y = max(section_y, min(section_bottom, y))
+            
+            if prev:
+                pygame.draw.line(surface, color, prev, (x, y), 2)
+            prev = (x, y)
+
+    # Divide panel into 3 sections for CPU, RAM, GPU
+    section_h = panel_h // 3
+    
+    # -------- CPU Graph (Green) - Top Section --------
+    draw_line_graph(CPU_GRAPH, (80, 220, 120), 10, section_h - 15)
+
+    # -------- RAM Graph (Purple) - Middle Section --------
+    draw_line_graph(RAM_GRAPH, (160, 80, 255), section_h + 10, section_h - 15)
+
+    # -------- GPU Graph (Orange) - Bottom Section --------
+    if gpu_temp:
+        draw_line_graph(GPU_GRAPH, (255, 180, 80), section_h * 2 + 10, section_h - 15)
+
+    # -------- Text Labels --------
+    label_cpu = font_tiny.render(f"CPU: {cpu_usage:.1f} %", True, (200, 255, 200))
+    label_ram = font_tiny.render(f"Memory: {ram_usage:.1f} %", True, (230, 200, 255))
+    label_gpu = font_tiny.render(f"GPU Temp: {gpu_temp:.1f}°C" if gpu_temp else "GPU: N/A", True, (255, 220, 170))
+
+    surface.blit(label_cpu, (panel_x + 10, panel_y + 10))
+    surface.blit(label_ram, (panel_x + 10, panel_y + 90))
+    surface.blit(label_gpu, (panel_x + 10, panel_y + 170))
+
+
+def fetch_chat_from_backend():
+    global LAST_CHAT_LEN
+
+    if not os.path.exists(CHAT_BRIDGE_FILE):
+        return
+
+    try:
+        with open(CHAT_BRIDGE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if len(data) > LAST_CHAT_LEN:
+            new_msgs = data[LAST_CHAT_LEN:]
+            for msg in new_msgs:
+                prefix = "You" if msg["role"] == "user" else "Neura"
+                CHAT_MESSAGES.append(f"{prefix}: {msg['message']}")
+            LAST_CHAT_LEN = len(data)
+
+    except Exception as e:
+        print("Frontend chat read error:", e)
+
+# -------------------- Conversation Pannel --------------------
+def draw_chat_panel(surface):
+    # Medium size, positioned just below the top-left analytics panel
+    panel_w = 300
+    panel_h = int(HEIGHT * 0.5)
+    panel_x = 20
+    # Top-left analytics: info_y=20, info_h=110; add a slight gap (12px)
+    panel_y = 20 + 110 + 12
+
+    bg = (10, 15, 35)
+    border = (40, 80, 160)
+
+    panel_rect = pygame.Rect(panel_x, panel_y, panel_w, panel_h)
+    pygame.draw.rect(surface, bg, panel_rect, border_radius=10)
+    pygame.draw.rect(surface, border, panel_rect, 1, border_radius=10)
+
+    font = pygame.font.SysFont("consolas", 15)
+
+    inner_pad = 12
+    inner_x = panel_x + inner_pad
+    inner_y = panel_y + inner_pad + 3
+    inner_w = panel_w - inner_pad * 2
+    line_h = font.get_linesize()
+
+    # Collect wrapped lines for all messages
+    all_lines = []
+    for msg in CHAT_MESSAGES:
+        wrapped = wrap_text(font, msg, inner_w)
+        all_lines.extend(wrapped)
+
+    # Compute how many lines fit vertically
+    max_lines = max(0, (panel_h - inner_pad * 2) // line_h)
+    start_idx = max(0, len(all_lines) - max_lines)
+
+    # Clip drawing to panel to prevent overflow
+    prev_clip = surface.get_clip()
+    surface.set_clip(panel_rect)
+
+    y = inner_y
+    for line in all_lines[start_idx:]:
+        text = font.render(line, True, (200, 220, 255))
+        surface.blit(text, (inner_x, y))
+        y += line_h
+
+    surface.set_clip(prev_clip)
 
 
 # -------------------- MAIN LOOP --------------------
@@ -583,6 +758,7 @@ def main():
             dots_sorted = sorted(dots, key=lambda d: d.z)
 
             # ---- DRAW ----
+            fetch_chat_from_backend()
             screen.fill(BG_COLOR)
 
             # ---- DRAW CAMERA WINDOW ----
@@ -622,7 +798,9 @@ def main():
 
             # Working analytics around the sphere
             fps = clock.get_fps()
+            # Draw chat first, then analytics so analytics appear above
             draw_analytics(screen, t, amplitude, fps)
+            draw_chat_panel(screen)
 
             pygame.display.flip()
     finally:

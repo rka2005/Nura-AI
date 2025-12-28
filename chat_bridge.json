@@ -1,0 +1,252 @@
+[
+  {
+    "time": "11:36:06",
+    "role": "neura",
+    "message": "Let me think..."
+  },
+  {
+    "time": "11:36:08",
+    "role": "neura",
+    "message": "Both Gemini and Groq failed: Error code: 400 - {'error': {'message': 'The model `llama3-70b-8192` has been decommissioned and is no longer supported. Please refer to https://console.groq.com/docs/deprecations for a recommendation on which model to use instead.', 'type': 'invalid_request_error', 'code': 'model_decommissioned'}}"
+  },
+  {
+    "time": "11:36:45",
+    "role": "user",
+    "message": "Teri Khushbu Aati Hai"
+  },
+  {
+    "time": "11:36:45",
+    "role": "neura",
+    "message": "Let me think..."
+  },
+  {
+    "time": "11:36:46",
+    "role": "neura",
+    "message": "Both Gemini and Groq failed: Error code: 400 - {'error': {'message': 'The model `llama3-70b-8192` has been decommissioned and is no longer supported. Please refer to https://console.groq.com/docs/deprecations for a recommendation on which model to use instead.', 'type': 'invalid_request_error', 'code': 'model_decommissioned'}}"
+  },
+  {
+    "time": "11:39:10",
+    "role": "neura",
+    "message": "Hello Sir!"
+  },
+  {
+    "time": "11:39:12",
+    "role": "neura",
+    "message": "Good Morning!"
+  },
+  {
+    "time": "11:39:13",
+    "role": "neura",
+    "message": "I am Neura. Please tell, how may I help you?"
+  },
+  {
+    "time": "11:39:49",
+    "role": "user",
+    "message": "Tum rahti Ho Jivan Mere Pyar Ki kahati Ho hello Nura"
+  },
+  {
+    "time": "11:39:49",
+    "role": "neura",
+    "message": "Hello Sir! It's good to hear from you."
+  },
+  {
+    "time": "11:41:58",
+    "role": "user",
+    "message": "Itna Na Mujhse Pyar Bada Pyar Karo"
+  },
+  {
+    "time": "11:41:58",
+    "role": "neura",
+    "message": "Let me think..."
+  },
+  {
+    "time": "11:42:00",
+    "role": "neura",
+    "message": "Both Gemini and Groq failed: Error code: 400 - {'error': {'message': 'The model `llama3-70b-8192` has been decommissioned and is no longer supported. Please refer to https://console.groq.com/docs/deprecations for a recommendation on which model to use instead.', 'type': 'invalid_request_error', 'code': 'model_decommissioned'}}"
+  },
+  {
+    "time": "11:42:19",
+    "role": "neura",
+    "message": "Hello Sir!"
+  },
+  {
+    "time": "11:42:20",
+    "role": "neura",
+    "message": "Good Morning!"
+  },
+  {
+    "time": "11:42:22",
+    "role": "neura",
+    "message": "I am Neura. Please tell, how may I help you?"
+  },
+  {
+    "time": "11:43:36",
+    "role": "neura",
+    "message": "Hello Sir!"
+  },
+  {
+    "time": "11:43:38",
+    "role": "neura",
+    "message": "Good Morning!"
+  },
+  {
+    "time": "11:43:39",
+    "role": "neura",
+    "message": "I am Neura. Please tell, how may I help you?"
+  },
+  {
+    "time": "11:45:09",
+    "role": "neura",
+    "message": "Hello Sir!"
+  },
+  {
+    "time": "11:45:11",
+    "role": "neura",
+    "message": "Good Morning!"
+  },
+  {
+    "time": "11:45:12",
+    "role": "neura",
+    "message": "I am Neura. Please tell, how may I help you?"
+  },
+  {
+    "time": "11:48:37",
+    "role": "neura",
+    "message": "Hello Sir!"
+  },
+  {
+    "time": "11:48:38",
+    "role": "neura",
+    "message": "Good Morning!"
+  },
+  {
+    "time": "11:48:40",
+    "role": "neura",
+    "message": "I am Neura. Please tell, how may I help you?"
+  },
+  {
+    "time": "11:49:48",
+    "role": "user",
+    "message": "Tere Bin Tere Sanam"
+  },
+  {
+    "time": "11:49:48",
+    "role": "neura",
+    "message": "Let me think..."
+  },
+  {
+    "time": "11:49:50",
+    "role": "neura",
+    "message": "Both Gemini and Groq failed: Error code: 400 - {'error': {'message': 'The model `llama3-70b-8192` has been decommissioned and is no longer supported. Please refer to https://console.groq.com/docs/deprecations for a recommendation on which model to use instead.', 'type': 'invalid_request_error', 'code': 'model_decommissioned'}}"
+  },
+  {
+    "time": "11:51:19",
+    "role": "neura",
+    "message": "Hello Sir!"
+  },
+  {
+    "time": "11:51:21",
+    "role": "neura",
+    "message": "Good Morning!"
+  },
+  {
+    "time": "11:51:23",
+    "role": "neura",
+    "message": "I am Neura. Please tell, how may I help you?"
+  },
+  {
+    "time": "11:59:13",
+    "role": "neura",
+    "message": "Hello Sir!"
+  },
+  {
+    "time": "11:59:15",
+    "role": "neura",
+    "message": "Good Morning!"
+  },
+  {
+    "time": "11:59:16",
+    "role": "neura",
+    "message": "I am Neura. Please tell, how may I help you?"
+  },
+  {
+    "time": "12:04:24",
+    "role": "neura",
+    "message": "Hello Sir!"
+  },
+  {
+    "time": "12:04:26",
+    "role": "neura",
+    "message": "Good Afternoon!"
+  },
+  {
+    "time": "12:04:27",
+    "role": "neura",
+    "message": "I am Neura. Please tell, how may I help you?"
+  },
+  {
+    "time": "12:06:00",
+    "role": "user",
+    "message": "yah Chand Ka Roshan Chehra julfon ka rang"
+  },
+  {
+    "time": "12:06:00",
+    "role": "neura",
+    "message": "Let me think..."
+  },
+  {
+    "time": "12:06:02",
+    "role": "neura",
+    "message": "Both Gemini and Groq failed: Error code: 400 - {'error': {'message': 'The model `llama3-70b-8192` has been decommissioned and is no longer supported. Please refer to https://console.groq.com/docs/deprecations for a recommendation on which model to use instead.', 'type': 'invalid_request_error', 'code': 'model_decommissioned'}}"
+  },
+  {
+    "time": "12:06:37",
+    "role": "user",
+    "message": "ok quit now"
+  },
+  {
+    "time": "12:06:37",
+    "role": "neura",
+    "message": "Goodbye Sir!"
+  },
+  {
+    "time": "12:10:46",
+    "role": "neura",
+    "message": "Hello Sir!"
+  },
+  {
+    "time": "12:10:47",
+    "role": "neura",
+    "message": "Good Afternoon!"
+  },
+  {
+    "time": "12:10:49",
+    "role": "neura",
+    "message": "I am Neura. Please tell, how may I help you?"
+  },
+  {
+    "time": "12:11:10",
+    "role": "user",
+    "message": "virtual activity assistant"
+  },
+  {
+    "time": "12:11:10",
+    "role": "neura",
+    "message": "Let me think..."
+  },
+  {
+    "time": "12:11:12",
+    "role": "neura",
+    "message": "Both Gemini and Groq failed: Error code: 400 - {'error': {'message': 'The model `llama3-70b-8192` has been decommissioned and is no longer supported. Please refer to https://console.groq.com/docs/deprecations for a recommendation on which model to use instead.', 'type': 'invalid_request_error', 'code': 'model_decommissioned'}}"
+  },
+  {
+    "time": "12:11:44",
+    "role": "user",
+    "message": "quit now"
+  },
+  {
+    "time": "12:11:44",
+    "role": "neura",
+    "message": "Goodbye Sir!"
+  }
+]

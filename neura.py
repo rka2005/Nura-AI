@@ -22,8 +22,9 @@ import pyautogui
 import requests
 import json
 import pyjokes
+from art import text2art
 
-
+CHAT_BRIDGE_FILE = "chat_bridge.json"
 load_dotenv()
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
@@ -33,8 +34,31 @@ model = genai.GenerativeModel('gemini-2.0-flash')
 engine = pyttsx3.init('sapi5')
 voices = engine.getProperty('voices')
 engine.setProperty('voice', voices[1].id)
+engine.setProperty('rate', 180)
 
 MEMORY_FILE = "neura_memory.json"
+
+def send_to_frontend(role, message):
+    payload = {
+        "time": datetime.datetime.now().strftime("%H:%M:%S"),
+        "role": role,
+        "message": message
+    }
+
+    try:
+        if os.path.exists(CHAT_BRIDGE_FILE):
+            with open(CHAT_BRIDGE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        else:
+            data = []
+
+        data.append(payload)
+
+        with open(CHAT_BRIDGE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data[-50:], f, indent=2)
+
+    except Exception as e:
+        print("Chat bridge error:", e)
 
 def load_memory():
     """Load or initialize memory structure."""
@@ -136,6 +160,7 @@ def analyze_memory_on_start():
 
 
 def speak(audio):
+    send_to_frontend("neura", audio)
     engine.say(audio)
     engine.runAndWait()
 
@@ -241,7 +266,7 @@ def ask_neura(user_message):
         response = "I can help you with various tasks like answering questions, managing files, setting reminders, and more."
     elif "your name" in user_message:
         response = "My name is Neura. I was created to help you."
-    elif "rohit" in user_message:
+    elif "rohit adak" in user_message:
         response = "He is my creator! a brilliant mind who brought me to life! I am lucky to assist him."
     elif "thank you" in user_message or "thanks" in user_message:
         response = "You're welcome, Sir!"
@@ -339,6 +364,7 @@ def takeCommand():
             print("Recognizing...")
             query = r.recognize_google(audio, language='en-in')
             print(f"User said: {query}")
+            send_to_frontend("user", query)
             return query.lower()
         except sr.UnknownValueError:
             print("Sorry, I couldn't understand what you said. Please try again.")
@@ -770,6 +796,9 @@ def get_weather(city):
 
 
 if __name__ == "__main__":
+    # Print startup banner once
+    art = text2art("Neura", font='block', chr_ignore=True)
+    print("\n" + art + "\n")
     wishMe()
     wishtime()
     analyze_memory_on_start()
@@ -821,6 +850,19 @@ if __name__ == "__main__":
                 speak("Sorry, I couldn't find any information.")
                 print(f"An error occurred: {e}")
                 remember_interaction(query, "about search failed")
+
+        elif 'who is' in query:
+            search_query = query.split('who is', 1)[1].strip()
+            speak("Sir! ")
+            try:
+                results = wikipedia.summary(search_query, sentences=3)
+                print(results)
+                speak(results)
+                remember_interaction(query, results)
+            except wikipedia.exceptions.WikipediaException as e:
+                speak("Sorry, I couldn't find any information.")
+                print(f"An error occurred: {e}")
+                remember_interaction(query, "who is search failed")
 
         elif 'search' in query or 'find' in query:
             search_query = query.split('search', 1)[1].strip() if 'search' in query else query.split('find', 1)[1].strip()
