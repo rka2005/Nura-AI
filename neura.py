@@ -60,24 +60,31 @@ def send_to_frontend(role, message):
         "message": message
     }
 
-    try:
-        if os.path.exists(CHAT_BRIDGE_FILE):
-            with open(CHAT_BRIDGE_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        else:
-            data = []
+    for attempt in range(5):
+        try:
+            if os.path.exists(CHAT_BRIDGE_FILE):
+                with open(CHAT_BRIDGE_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            else:
+                data = []
 
-        data.append(payload)
+            data.append(payload)
 
-        temp_bridge_file = f"{CHAT_BRIDGE_FILE}.tmp"
-        with open(temp_bridge_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(temp_bridge_file, CHAT_BRIDGE_FILE)
-
-    except Exception as e:
-        print("Chat bridge error:", e)
+            temp_bridge_file = f"{CHAT_BRIDGE_FILE}.tmp"
+            with open(temp_bridge_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_bridge_file, CHAT_BRIDGE_FILE)
+            break
+        except (OSError, PermissionError) as e:
+            if attempt < 4:
+                time.sleep(0.04)
+            else:
+                print("Chat bridge error:", e)
+        except Exception as e:
+            print("Chat bridge error:", e)
+            break
 
 def load_memory():
     """Load or initialize memory structure via MemoryManager."""

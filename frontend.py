@@ -11,123 +11,213 @@ import webbrowser
 import psutil
 from collections import deque
 import json
+import time
+import datetime
 
-# ------------- GLOBALS THAT WILL BE UPDATED -------------
-CHAT_MESSAGES = deque(maxlen=25)
-CHAT_SCROLL_OFFSET = 0
+# ------------- CONFIGURATION & BRIDGES -------------
 CHAT_BRIDGE_FILE = "chat_bridge.json"
+INPUT_BRIDGE_FILE = "input_bridge.json"
+STATUS_BRIDGE_FILE = "status_bridge.json"
+
+CHAT_MESSAGES = deque(maxlen=40)  # Stores dicts: {"role": ..., "message": ..., "time": ...}
+CHAT_SCROLL_OFFSET = 0
 LAST_CHAT_SIGNATURE = None
 
-WIDTH, HEIGHT = 500, 500
+# Screen dimensions (dynamically updated)
+WIDTH, HEIGHT = 1400, 850
 CENTER_X, CENTER_Y = WIDTH // 2, HEIGHT // 2
 
-SPHERE_RADIUS_BASE = 250   # base radius
+# 3D Sphere Configuration
+SPHERE_RADIUS_BASE = 240
 SPHERE_RADIUS = SPHERE_RADIUS_BASE
-FOV = 650
+FOV = 600
+NUM_DOTS = 1800
+ROT_Y_SPEED = 0.35
+ROT_X_SPEED = 0.16
 
-BG_COLOR = (5, 8, 20)
-SPHERE_OUTLINE_COLOR = (10, 10, 20)
-
-ROT_Y_SPEED = 0.4
-ROT_X_SPEED = 0.18
-
-NUM_DOTS = 2000          # number of dots
-GOLD = (160, 80, 255)
-
-# Audio config (still used to react the HUD)
+# Audio Configuration
 CHUNK = 1024
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
 RATE = 44100
+SPECTRUM_BANDS = 24
+spectrum_heights = [0.0] * SPECTRUM_BANDS
 
+# Telemetry History
 CPU_GRAPH = []
 RAM_GRAPH = []
 GPU_GRAPH = []
-GRAPH_MAX_POINTS = 120
+GRAPH_MAX_POINTS = 100
 GPU_STATS = {"usage": None, "memory": None, "updated_at": 0.0}
 MEMORY_CACHE = {"data": {}, "updated_at": 0.0}
-ACTION_STATUS = "READY FOR COMMAND"
-ACTION_STATUS_UNTIL = 0
 
+# Action Status & Notifications
+ACTION_STATUS = "SYSTEM OPERATIONAL // READY"
+ACTION_STATUS_UNTIL = 0
+ASSISTANT_STATUS = "READY"
+LAST_STATUS_CHECK = 0.0
+
+# Camera Controls
+CAMERA_ENABLED = True
+CAMERA_SURFACE = None
+
+# Microphone Controls
+MIC_MUTED = False
+
+# Quick Actions
 QUICK_ACTIONS = [
-    ("MUSIC", "play", (255, 180, 80)),
-    ("WEB", "web", (80, 190, 255)),
-    ("FILES", "files", (150, 220, 130)),
-    ("SYSTEM", "system", (210, 130, 255)),
+    ("JOKE", "joke", "tell a joke", (255, 200, 80)),
+    ("WEATHER", "weather", "weather", (80, 210, 255)),
+    ("MEMORY", "memory", "what do you know about me", (140, 240, 160)),
+    ("MUSIC", "music", "open youtube", (255, 120, 120)),
+    ("FILES", "files", "open files", (180, 150, 255)),
+    ("TASKMGR", "taskmgr", "open task manager", (120, 255, 220)),
 ]
 
-# --------- THEMES (for HUD inner colors) ---------
-# Outer HUD stays cyan; only inner HUD colors change
+# Themes (HUD & Accent Palettes)
 THEMES = {
-    1: {  # Blue + Orange/Gold (default)
+    1: {
         "name": "Orange / Gold",
-        "quiet_core": (230, 120, 20),
-        "loud_core": (255, 230, 80),
+        "primary": (255, 175, 40),
+        "primary_soft": (200, 130, 25),
+        "accent": (255, 215, 80),
+        "sphere_dots": (255, 190, 70),
+        "quiet_core": (220, 110, 20),
+        "loud_core": (255, 230, 90),
     },
-    2: {  # Blue + Purple (cyber)
+    2: {
         "name": "Neon Purple",
-        "quiet_core": (160, 80, 255),
-        "loud_core": (255, 140, 255),
+        "primary": (170, 90, 255),
+        "primary_soft": (130, 60, 210),
+        "accent": (230, 130, 255),
+        "sphere_dots": (180, 110, 255),
+        "quiet_core": (150, 60, 240),
+        "loud_core": (255, 160, 255),
     },
-    3: {  # White + Red (battle mode)
+    3: {
         "name": "Battle Red",
-        "quiet_core": (230, 230, 230),
-        "loud_core": (255, 80, 80),
+        "primary": (255, 75, 75),
+        "primary_soft": (200, 45, 45),
+        "accent": (255, 140, 140),
+        "sphere_dots": (255, 95, 95),
+        "quiet_core": (200, 40, 40),
+        "loud_core": (255, 120, 120),
     },
-    4: {  # Green + Yellow (bio scanner)
-        "name": "Bio Scanner",
-        "quiet_core": (40, 200, 80),
-        "loud_core": (220, 255, 140),
+    4: {
+        "name": "Bio Matrix",
+        "primary": (50, 225, 130),
+        "primary_soft": (35, 175, 95),
+        "accent": (160, 255, 180),
+        "sphere_dots": (70, 230, 140),
+        "quiet_core": (30, 180, 80),
+        "loud_core": (200, 255, 160),
     },
 }
 
-current_theme = 1  # start with theme 1
-ULTRA_BOLD = False  # toggle with 'U'
+current_theme = 1
+ULTRA_BOLD = False
 
-# --------- SPEAKING EFFECT (PULSES) ---------
-VOICE_PULSES = []          # list of start times (ms)
-VOICE_THRESHOLD = 0.15     # amplitude threshold to trigger a pulse
-VOICE_PULSE_LIFE = 1200.0  # ms each pulse lives
-last_amplitude = 0.0       # for edge detection
+# Voice Pulse Effect
+VOICE_PULSES = []
+VOICE_THRESHOLD = 0.14
+VOICE_PULSE_LIFE = 1100.0
+last_amplitude = 0.0
+
+# Text Input State
+USER_INPUT_TEXT = ""
+INPUT_ACTIVE = True
+CURSOR_VISIBLE = True
+LAST_CURSOR_BLINK = 0
+
+# Colors
+COLOR_BG = (6, 10, 22)
+COLOR_PANEL_BG = (10, 17, 36)
+COLOR_PANEL_BORDER = (32, 58, 105)
+COLOR_TEXT_WHITE = (235, 245, 255)
+COLOR_TEXT_DIM = (135, 165, 205)
+COLOR_CYAN = (0, 220, 255)
+COLOR_CYAN_DIM = (0, 150, 190)
+
+# Layout Rectangles (Computed dynamically)
+LAYOUT = {}
 
 
+# -------------------- RESPONSIVE LAYOUT ENGINE --------------------
 def recalc_layout(width, height):
-    global WIDTH, HEIGHT, CENTER_X, CENTER_Y, SPHERE_RADIUS_BASE, SPHERE_RADIUS, FOV
+    global WIDTH, HEIGHT, CENTER_X, CENTER_Y, SPHERE_RADIUS_BASE, SPHERE_RADIUS, FOV, LAYOUT
 
-    WIDTH, HEIGHT = width, height
+    WIDTH = max(1000, width)
+    HEIGHT = max(680, height)
     CENTER_X, CENTER_Y = WIDTH // 2, HEIGHT // 2
 
-    # Sphere radius: use a percentage of the smallest dimension
-    SPHERE_RADIUS_BASE = int(min(WIDTH, HEIGHT) * 0.32)
-    SPHERE_RADIUS = SPHERE_RADIUS_BASE
+    # Proportional column sizing
+    left_w = int(max(330, min(420, WIDTH * 0.27)))
+    right_w = int(max(320, min(400, WIDTH * 0.26)))
 
-    # FOV: scale with radius for consistent depth feeling
+    header_h = 52
+    status_bar_h = 30
+    pad = 14
+
+    content_y = header_h + pad
+    content_h = HEIGHT - content_y - status_bar_h - pad
+
+    # Left Column: Chat & Interactive Command Hub
+    left_x = pad
+    input_box_h = 44
+    quick_act_h = 76
+    chat_h = content_h - input_box_h - quick_act_h - (pad * 2)
+
+    LAYOUT["header"] = pygame.Rect(0, 0, WIDTH, header_h)
+    LAYOUT["status_bar"] = pygame.Rect(0, HEIGHT - status_bar_h, WIDTH, status_bar_h)
+
+    LAYOUT["chat_panel"] = pygame.Rect(left_x, content_y, left_w, chat_h)
+    LAYOUT["quick_actions"] = pygame.Rect(left_x, content_y + chat_h + pad, left_w, quick_act_h)
+    LAYOUT["input_box"] = pygame.Rect(left_x, content_y + chat_h + quick_act_h + (pad * 2), left_w, input_box_h)
+
+    # Right Column: Vision, Memory, Hardware Performance
+    right_x = WIDTH - right_w - pad
+    cam_h = int(content_h * 0.31)
+    mem_h = int(content_h * 0.30)
+    perf_h = content_h - cam_h - mem_h - (pad * 2)
+
+    LAYOUT["cam_panel"] = pygame.Rect(right_x, content_y, right_w, cam_h)
+    LAYOUT["mem_panel"] = pygame.Rect(right_x, content_y + cam_h + pad, right_w, mem_h)
+    LAYOUT["perf_panel"] = pygame.Rect(right_x, content_y + cam_h + mem_h + (pad * 2), right_w, perf_h)
+
+    # Center Column Area
+    center_w = right_x - (left_x + left_w) - (pad * 2)
+    center_x = left_x + left_w + pad
+    LAYOUT["center_area"] = pygame.Rect(center_x, content_y, center_w, content_h)
+
+    # Center sphere placement
+    CENTER_X = center_x + center_w // 2
+    CENTER_Y = content_y + int(content_h * 0.44)
+
+    SPHERE_RADIUS_BASE = int(min(center_w, content_h) * 0.31)
+    SPHERE_RADIUS = SPHERE_RADIUS_BASE
     FOV = SPHERE_RADIUS_BASE * 2.3
 
+    # Center bottom audio spectrum
+    spectrum_w = min(460, center_w - 20)
+    spectrum_h = 56
+    LAYOUT["spectrum"] = pygame.Rect(CENTER_X - spectrum_w // 2, content_y + content_h - spectrum_h - 8, spectrum_w, spectrum_h)
 
-# -------------------- DOT ON SPHERE --------------------
+
+# -------------------- 3D AUDIO-REACTIVE SPHERE --------------------
 class Dot:
     def __init__(self):
-        # random point on sphere via spherical coordinates
         theta = random.uniform(0, 2 * math.pi)
         phi = random.uniform(0, math.pi)
-
         self.theta = theta
         self.phi = phi
-
-        self.dtheta = random.uniform(-0.4, 0.4)
-        self.dphi = random.uniform(-0.25, 0.25)
-
-        self.x = 0
-        self.y = 0
-        self.z = 0
+        self.dtheta = random.uniform(-0.35, 0.35)
+        self.dphi = random.uniform(-0.2, 0.2)
+        self.x, self.y, self.z = 0, 0, 0
 
     def update(self, dt, rot_x, rot_y):
-        # travel along the surface
         self.theta += self.dtheta * dt * 0.001
         self.phi += self.dphi * dt * 0.001
 
-        # keep latitude in range
         if self.phi < 0:
             self.phi = -self.phi
             self.dphi *= -1
@@ -135,18 +225,15 @@ class Dot:
             self.phi = 2 * math.pi - self.phi
             self.dphi *= -1
 
-        # spherical -> 3D cartesian (using current SPHERE_RADIUS)
         x = SPHERE_RADIUS * math.sin(self.phi) * math.cos(self.theta)
         y = SPHERE_RADIUS * math.cos(self.phi)
         z = SPHERE_RADIUS * math.sin(self.phi) * math.sin(self.theta)
 
-        # rotate around Y axis
         cos_y = math.cos(rot_y)
         sin_y = math.sin(rot_y)
         xz = x * cos_y + z * sin_y
         zz = -x * sin_y + z * cos_y
 
-        # rotate around X axis
         cos_x = math.cos(rot_x)
         sin_x = math.sin(rot_x)
         yz = y * cos_x - zz * sin_x
@@ -155,457 +242,161 @@ class Dot:
         self.x, self.y, self.z = xz, yz, zz2
 
     def project(self):
-        # camera along +z axis
         z_cam = self.z + SPHERE_RADIUS * 2.2
         if z_cam <= 1:
             z_cam = 1
-
         factor = FOV / z_cam
 
         sx = int(CENTER_X + self.x * factor)
         sy = int(CENTER_Y + self.y * factor)
 
-        # depth factor [0..1], 1 = near front
-        depth = max(0.0, min(1.0, 1 - (z_cam / (SPHERE_RADIUS_BASE * 3.0))))
-
-        # radius scales with depth, min size ensures visibility
+        depth = max(0.0, min(1.0, 1.0 - (z_cam / (SPHERE_RADIUS_BASE * 3.0))))
         radius = max(1, int(1 + depth * 3))
 
-        r, g, b = GOLD
-        brightness = 0.5 + depth * 0.7  # a bit brighter
-        r = int(r * brightness)
-        g = int(g * brightness)
-        b = int(b * brightness)
+        theme = THEMES.get(current_theme, THEMES[1])
+        base_color = theme["sphere_dots"]
+        brightness = 0.45 + depth * 0.65
+        r = int(min(255, base_color[0] * brightness))
+        g = int(min(255, base_color[1] * brightness))
+        b = int(min(255, base_color[2] * brightness))
 
-        return sx, sy, radius, (r, g, b), depth
-
-
-# -------------------- DRAW SHARP DOT --------------------
-def draw_dot(surface, x, y, radius, color):
-    pygame.draw.circle(surface, color, (x, y), radius)
+        return sx, sy, radius, (r, g, b)
 
 
-# -------------------- UTILS --------------------
+# -------------------- MATH & COLOR HELPERS --------------------
 def lerp(a, b, t):
     return int(a + (b - a) * t)
 
-
 def mix_color(c1, c2, t):
-    """Blend two RGB colors with factor t in [0,1]."""
+    t = max(0.0, min(1.0, t))
     return (
         lerp(c1[0], c2[0], t),
         lerp(c1[1], c2[1], t),
         lerp(c1[2], c2[2], t),
     )
 
-
-# -------------------- TEXT WRAP UTILITY --------------------
 def wrap_text(font, text, max_width):
     lines = []
-    words = text.split(" ")
-    current = ""
-
-    for word in words:
-        test = word if not current else current + " " + word
-        if font.size(test)[0] <= max_width:
-            current = test
-        else:
-            if current:
-                lines.append(current)
-            # If a single word exceeds max_width, hard-wrap it
-            if font.size(word)[0] > max_width:
-                chunk = ""
-                for ch in word:
-                    test_chunk = chunk + ch
-                    if font.size(test_chunk)[0] <= max_width:
-                        chunk = test_chunk
-                    else:
-                        if chunk:
-                            lines.append(chunk)
-                        chunk = ch
-                current = chunk
+    paragraphs = text.split("\n")
+    for para in paragraphs:
+        if not para:
+            lines.append("")
+            continue
+        words = para.split(" ")
+        current = ""
+        for word in words:
+            test = word if not current else current + " " + word
+            if font.size(test)[0] <= max_width:
+                current = test
             else:
-                current = word
-
-    if current:
-        lines.append(current)
+                if current:
+                    lines.append(current)
+                if font.size(word)[0] > max_width:
+                    chunk = ""
+                    for ch in word:
+                        if font.size(chunk + ch)[0] <= max_width:
+                            chunk += ch
+                        else:
+                            if chunk:
+                                lines.append(chunk)
+                            chunk = ch
+                    current = chunk
+                else:
+                    current = word
+        if current:
+            lines.append(current)
     return lines
 
 
-# -------------------- ADVANCED JARVIS HUD --------------------
-def draw_sidd_hud(surface, t, amplitude):
-    global ULTRA_BOLD, VOICE_PULSES
+# -------------------- FUTURISTIC HUD GLASS PANEL --------------------
+def draw_glass_panel(surface, rect, title="", accent=None, badge=None):
+    if accent is None:
+        theme = THEMES.get(current_theme, THEMES[1])
+        accent = theme["primary"]
 
-    center = (CENTER_X, CENTER_Y)
-    ts = t * 0.001  # ms -> seconds
+    # Glass background with soft border
+    bg_surf = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+    bg_surf.fill((10, 17, 36, 215))
+    surface.blit(bg_surf, (rect.x, rect.y))
 
-    # base size relative to screen
-    base = int(min(WIDTH, HEIGHT) * 0.12)
+    pygame.draw.rect(surface, (28, 48, 90), rect, 1, border_radius=8)
 
-    # smoother amplitude curve
-    amp = min(max(amplitude, 0.0), 1.0)
-    amp_visual = amp ** 0.7  # keeps it moving even with small sound
+    # Cyber Corner Brackets [+]
+    bracket_len = 8
+    pygame.draw.line(surface, accent, (rect.x, rect.y), (rect.x + bracket_len, rect.y), 2)
+    pygame.draw.line(surface, accent, (rect.x, rect.y), (rect.x, rect.y + bracket_len), 2)
+    pygame.draw.line(surface, accent, (rect.right - bracket_len, rect.y), (rect.right, rect.y), 2)
+    pygame.draw.line(surface, accent, (rect.right, rect.y), (rect.right, rect.y + bracket_len), 2)
+    pygame.draw.line(surface, accent, (rect.x, rect.bottom), (rect.x + bracket_len, rect.bottom), 2)
+    pygame.draw.line(surface, accent, (rect.x, rect.bottom - bracket_len), (rect.x, rect.bottom), 2)
+    pygame.draw.line(surface, accent, (rect.right - bracket_len, rect.bottom), (rect.right, rect.bottom), 2)
+    pygame.draw.line(surface, accent, (rect.right, rect.bottom - bracket_len), (rect.right, rect.bottom), 2)
 
-    # ---------- CONSTANT CYAN OUTER FRAME ----------
-    CYAN = (0, 220, 255)
-    CYAN_SOFT = (0, 170, 220)
+    # Top accent line
+    pygame.draw.line(surface, accent, (rect.x + 14, rect.y + 1), (rect.x + 65, rect.y + 1), 2)
 
-    # thickness presets
-    if ULTRA_BOLD:
-        outer_ring_w = 5
-        inner_ring_w = 3
-        glow_ring_w = 2
-        gap_arc_w = 3
-        core_outline_w = 6
-        flicker_ring_w = 3
-        polygon_w = 3
-        arc_ring_w = 4
-        tick_w = 2
-        scan_line_w = 2
-        sweep_w = 6
-        micro_dot_r = 3
-        orbit_dot_r = 7
-        pulse_w = 4
-    else:
-        outer_ring_w = 2
-        inner_ring_w = 1
-        glow_ring_w = 1
-        gap_arc_w = 2
-        core_outline_w = 3
-        flicker_ring_w = 1
-        polygon_w = 1
-        arc_ring_w = 2
-        tick_w = 1
-        scan_line_w = 1
-        sweep_w = 3
-        micro_dot_r = 2
-        orbit_dot_r = 5
-        pulse_w = 2
+    # Header title
+    if title:
+        title_font = pygame.font.SysFont("consolas", 12, bold=True)
+        t_surf = title_font.render(title, True, (215, 235, 255))
+        surface.blit(t_surf, (rect.x + 14, rect.y + 8))
 
-    # ring radii
-    r_inner_frame = int(base * 0.85)
-    r_outer_frame = int(base * 1.4)
-    r_outer_glow = int(base * 1.6)
-
-    # outermost thin ring
-    pygame.draw.circle(surface, CYAN_SOFT, center, r_outer_glow, glow_ring_w)
-    # main outer ring
-    pygame.draw.circle(surface, CYAN, center, r_outer_frame, outer_ring_w)
-    # inner frame ring
-    pygame.draw.circle(surface, CYAN, center, r_inner_frame, inner_ring_w)
-
-    # spinning cyan "gaps" on the outer frame for subtle motion (color still cyan)
-    gap_rect = pygame.Rect(0, 0, r_outer_frame * 2, r_outer_frame * 2)
-    gap_rect.center = center
-    gap_speed = 0.6
-    for i in range(3):
-        offset = ts * gap_speed + i * (2 * math.pi / 3)
-        start_angle = offset
-        end_angle = offset + math.pi / 7
-        pygame.draw.arc(surface, CYAN_SOFT, gap_rect, start_angle, end_angle, gap_arc_w)
-
-    # ---------- THEME-BASED INNER COLORS ----------
-    theme = THEMES.get(current_theme, THEMES[1])
-    quiet_core = theme["quiet_core"]
-    loud_core = theme["loud_core"]
-    inner_color = mix_color(quiet_core, loud_core, amp_visual)
-
-    # ---------- PULSING CORE ----------
-    core_radius = int(base * (0.45 + 0.25 * amp_visual))
-    # outer core outline
-    pygame.draw.circle(surface, inner_color, center, core_radius, core_outline_w)
-    # inner flicker ring
-    flicker_radius = int(core_radius * (0.5 + 0.2 * math.sin(ts * 4)))
-    flicker_radius = max(4, flicker_radius)
-    pygame.draw.circle(surface, inner_color, center, flicker_radius, flicker_ring_w)
-
-    # ---------- ROTATING POLYGON "PROCESSOR" ----------
-    sides = 6
-    poly_radius = int(core_radius * 0.75)
-    poly_angle_offset = ts * 1.2  # rotation speed
-    poly_points = []
-    for i in range(sides):
-        ang = poly_angle_offset + (2 * math.pi * i / sides)
-        x = CENTER_X + poly_radius * math.cos(ang)
-        y = CENTER_Y + poly_radius * math.sin(ang)
-        poly_points.append((x, y))
-    pygame.draw.polygon(surface, inner_color, poly_points, polygon_w)
-
-    # ---------- ARC RING (REACTIVE) ----------
-    arc_radius = int(base * 1.05)
-    arc_rect = pygame.Rect(0, 0, arc_radius * 2, arc_radius * 2)
-    arc_rect.center = center
-    num_arcs = 5
-    for i in range(num_arcs):
-        ang_off = ts * (0.9 + 0.2 * i)
-        span = (math.pi / 7) + amp_visual * (math.pi / 10)
-        start_ang = ang_off + i * (2 * math.pi / num_arcs)
-        end_ang = start_ang + span
-        pygame.draw.arc(surface, inner_color, arc_rect, start_ang, end_ang, arc_ring_w)
-
-    # ---------- CYAN TICKS ON INNER FRAME ----------
-    tick_count = 24
-    tick_rot = ts * 0.5
-    for i in range(tick_count):
-        ang = tick_rot + (2 * math.pi * i / tick_count)
-        r0 = r_inner_frame * 0.95
-        r1 = r_inner_frame * 1.02
-        x0 = CENTER_X + r0 * math.cos(ang)
-        y0 = CENTER_Y + r0 * math.sin(ang)
-        x1 = CENTER_X + r1 * math.cos(ang)
-        y1 = CENTER_Y + r1 * math.sin(ang)
-        pygame.draw.line(surface, CYAN_SOFT, (x0, y0), (x1, y1), tick_w)
-
-    # ---------- RADIAL SCANNING LINES (REACTIVE) ----------
-    num_lines = 18
-    line_rot = ts * 1.8
-    for i in range(num_lines):
-        ang = line_rot + (2 * math.pi * i / num_lines)
-        inner_r = core_radius * 1.05
-        outer_r = r_inner_frame * (0.9 + 0.2 * amp_visual)
-        x1 = CENTER_X + inner_r * math.cos(ang)
-        y1 = CENTER_Y + inner_r * math.sin(ang)
-        x2 = CENTER_X + outer_r * math.cos(ang)
-        y2 = CENTER_Y + outer_r * math.sin(ang)
-        pygame.draw.line(surface, inner_color, (x1, y1), (x2, y2), scan_line_w)
-
-    # ---------- SWEEPING SCANNER BEAM ----------
-    sweep_radius = r_outer_frame * 1.02
-    sweep_rect = pygame.Rect(0, 0, sweep_radius * 2, sweep_radius * 2)
-    sweep_rect.center = center
-    sweep_angle = ts * 1.3
-    sweep_span = math.pi / 20
-    sweep_color = mix_color(inner_color, (255, 255, 255), 0.4)  # a bit brighter
-    pygame.draw.arc(surface, sweep_color, sweep_rect, sweep_angle, sweep_angle + sweep_span, sweep_w)
-
-    # ---------- ORBITING ENERGY DOT (REACTIVE) ----------
-    orbit_r = r_inner_frame * 1.1
-    orb_angle = ts * 2.2
-    ox = CENTER_X + orbit_r * math.cos(orb_angle)
-    oy = CENTER_Y + orbit_r * math.sin(orb_angle)
-
-    orb_quiet = mix_color(inner_color, (255, 255, 255), 0.2)
-    orb_loud = mix_color(inner_color, (255, 255, 255), 0.7)
-    orb_color = mix_color(orb_quiet, orb_loud, amp_visual)
-    pygame.draw.circle(surface, orb_color, (int(ox), int(oy)), orbit_dot_r)
-
-    # ---------- INNER MICRO-DOTS (REACTIVE TEXTURE) ----------
-    micro_count = 12
-    for i in range(micro_count):
-        ang = ts * 0.7 + i * (2 * math.pi / micro_count)
-        r_m = core_radius * (0.3 + 0.5 * ((i % 3) / 2))
-        x = CENTER_X + r_m * math.cos(ang)
-        y = CENTER_Y + r_m * math.sin(ang)
-        pygame.draw.circle(surface, inner_color, (int(x), int(y)), micro_dot_r)
-
-    # ---------- SPEAKING PULSES (VOICE RINGS) ----------
-    # expanding circles from core when voice pulses trigger
-    alive_pulses = []
-    for start_t in VOICE_PULSES:
-        age = t - start_t  # ms
-        if age < 0 or age > VOICE_PULSE_LIFE:
-            continue
-        alive_pulses.append(start_t)
-
-        # 0..1 progress
-        p = age / VOICE_PULSE_LIFE
-        # radius from just outside core to near outer frame
-        pulse_radius = core_radius * 1.2 + p * (r_outer_frame * 0.95 - core_radius * 1.2)
-        # fade color from bright inner_color to cyan soft
-        pulse_color = mix_color(inner_color, CYAN_SOFT, p)
-        pygame.draw.circle(surface, pulse_color, center, int(pulse_radius), pulse_w)
-
-    VOICE_PULSES = alive_pulses
+    # Badge in top right of panel
+    if badge:
+        b_font = pygame.font.SysFont("consolas", 10, bold=True)
+        b_surf = b_font.render(badge, True, accent)
+        surface.blit(b_surf, (rect.right - b_surf.get_width() - 14, rect.y + 9))
 
 
-# -------------------- ANALYTICS PANELS OUTSIDE SPHERE --------------------
-def draw_analytics(surface, t, amplitude, fps):
-    global current_theme, ULTRA_BOLD, GPU_STATS
+# -------------------- COMMAND & BRIDGE HELPERS --------------------
+def send_command_to_backend(command_text):
+    global ACTION_STATUS, ACTION_STATUS_UNTIL, CHAT_SCROLL_OFFSET
+    if not command_text or not command_text.strip():
+        return
+    clean_cmd = command_text.strip()
+    try:
+        cmds = []
+        if os.path.exists(INPUT_BRIDGE_FILE):
+            try:
+                with open(INPUT_BRIDGE_FILE, "r", encoding="utf-8") as f:
+                    cmds = json.load(f)
+                    if not isinstance(cmds, list):
+                        cmds = []
+            except Exception:
+                cmds = []
 
-    # --- Colors ---
-    panel_bg = (10, 15, 35)
-    panel_border = (40, 60, 120)
-    text_color = (200, 220, 255)
+        cmds.append(clean_cmd)
+        temp_file = f"{INPUT_BRIDGE_FILE}.tmp"
+        with open(temp_file, "w", encoding="utf-8") as f:
+            json.dump(cmds, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_file, INPUT_BRIDGE_FILE)
 
-    theme = THEMES.get(current_theme, THEMES[1])
-    theme_name = theme["name"]
-    amp_pct = int(amplitude * 100)
+        # Optimistically record in chat panel
+        now_str = datetime.datetime.now().strftime("%H:%M:%S")
+        CHAT_MESSAGES.append({"role": "user", "message": clean_cmd, "time": now_str})
+        CHAT_SCROLL_OFFSET = 0
 
-    # smoother amp for visuals
-    amp_visual = min(max(amplitude, 0.0), 1.0) ** 0.8
+        ACTION_STATUS = f"DISPATCHED: {clean_cmd.upper()[:28]}"
+        ACTION_STATUS_UNTIL = pygame.time.get_ticks() + 2500
+    except Exception as e:
+        ACTION_STATUS = f"CMD BRIDGE ERR: {e}"
+        ACTION_STATUS_UNTIL = pygame.time.get_ticks() + 2500
 
-    # --- FONT ---
-    font_small = pygame.font.SysFont("consolas", 16)
-    font_tiny = pygame.font.SysFont("consolas", 13)
 
-    # ---------- TOP-LEFT INFO PANEL ----------
-    info_w, info_h = 230, 110
-    info_x, info_y = 20, 20
-    info_rect = pygame.Rect(info_x, info_y, info_w, info_h)
-
-    pygame.draw.rect(surface, panel_bg, info_rect, border_radius=8)
-    pygame.draw.rect(surface, panel_border, info_rect, 1, border_radius=8)
-
-    lines = [
-        f"NEURA — ANALYTICS",
-        f"Ultra-Bold: {'ON' if ULTRA_BOLD else 'OFF'}",
-        f"Amplitude: {amp_pct:3d} %",
-        f"FPS: {int(fps):3d}",
-    ]
-    for i, text in enumerate(lines):
-        surf = font_small.render(text, True, text_color)
-        surface.blit(surf, (info_x + 10, info_y + 8 + i * 18))
-
-    # ---------- BOTTOM-CENTER AUDIO LEVEL BAR ----------
-    bar_w, bar_h = 320, 16
-    bar_x = CENTER_X - bar_w // 2
-    bar_y = HEIGHT - bar_h - 30
-
-    outer_bar = pygame.Rect(bar_x, bar_y, bar_w, bar_h)
-    pygame.draw.rect(surface, panel_bg, outer_bar, border_radius=8)
-    pygame.draw.rect(surface, panel_border, outer_bar, 1, border_radius=8)
-
-    # fill based on amplitude
-    fill_w = int(bar_w * amp_visual)
-    if fill_w > 0:
-        # green → yellow → red based on amplitude
-        low = (80, 200, 120)
-        high = (255, 80, 80)
-        fill_color = mix_color(low, high, amp_visual)
-        inner_bar = pygame.Rect(bar_x + 2, bar_y + 2, fill_w - 4 if fill_w > 4 else 0, bar_h - 4)
-        if inner_bar.width > 0:
-            pygame.draw.rect(surface, fill_color, inner_bar, border_radius=6)
-
-    # label
-    label = font_tiny.render("VOICE LEVEL", True, text_color)
-    surface.blit(label, (bar_x, bar_y - 16))
-
-        # ---------- BOTTOM-RIGHT SYSTEM PERFORMANCE GRAPH ----------
-        # ---------- TASK MANAGER STYLE PERFORMANCE PANEL ----------
-    panel_w, panel_h = 300, 240
-    panel_x = WIDTH - panel_w - 20
-    panel_y = HEIGHT - panel_h - 30
-
-    perf_rect = pygame.Rect(panel_x, panel_y, panel_w, panel_h)
-    pygame.draw.rect(surface, panel_bg, perf_rect, border_radius=8)
-    pygame.draw.rect(surface, panel_border, perf_rect, 1, border_radius=8)
-
-    # -------- Collect System Stats --------
-    cpu_usage = psutil.cpu_percent(interval=0)
-    ram_info = psutil.virtual_memory()
-    ram_usage = ram_info.percent
-
-    # Windows commonly has no psutil GPU sensor, so use nvidia-smi when available.
-    now = pygame.time.get_ticks() / 1000.0
-    if now - GPU_STATS["updated_at"] >= 0.5:
-        GPU_STATS["updated_at"] = now
-        try:
-            result = subprocess.run(
-                [
-                    "nvidia-smi",
-                    "--query-gpu=utilization.gpu,memory.used,memory.total",
-                    "--format=csv,noheader,nounits",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=0.25,
-                check=False,
-            )
-            values = result.stdout.strip().split(",")
-            if result.returncode == 0 and len(values) >= 3:
-                GPU_STATS["usage"] = float(values[0].strip())
-                GPU_STATS["memory"] = (
-                    float(values[1].strip()),
-                    float(values[2].strip()),
-                )
-            else:
-                GPU_STATS["usage"] = None
-                GPU_STATS["memory"] = None
-        except (OSError, ValueError, subprocess.SubprocessError):
-            GPU_STATS["usage"] = None
-            GPU_STATS["memory"] = None
-
-    gpu_usage = GPU_STATS["usage"]
-
-    # -------- Update Graph Buffers --------
-    CPU_GRAPH.append(cpu_usage)
-    RAM_GRAPH.append(ram_usage)
-    if gpu_usage is not None:
-        GPU_GRAPH.append(gpu_usage)
-    else:
-        GPU_GRAPH.append(0)
-
-    # Trim graphs to max length
-    CPU_GRAPH[:] = CPU_GRAPH[-GRAPH_MAX_POINTS:]
-    RAM_GRAPH[:] = RAM_GRAPH[-GRAPH_MAX_POINTS:]
-    GPU_GRAPH[:] = GPU_GRAPH[-GRAPH_MAX_POINTS:]
-
-    # -------- Draw Grid Like Task Manager --------
-    grid_cols = 12
-    grid_rows = 6
-    cell_w = panel_w / grid_cols
-    cell_h = panel_h / grid_rows
-
-    for i in range(grid_cols):
-        x = panel_x + i * cell_w
-        pygame.draw.line(surface, (30, 45, 70), (x, panel_y), (x, panel_y + panel_h), 1)
-
-    for j in range(grid_rows):
-        y = panel_y + j * cell_h
-        pygame.draw.line(surface, (30, 45, 70), (panel_x, y), (panel_x + panel_w, y), 1)
-
-    # -------- Helper: Draw a Line Graph (clipped to panel) --------
-    def draw_line_graph(values, color, section_offset, section_height):
-        """
-        Draw a line graph within a specific section of the panel.
-        section_offset: y-offset from panel_y where this section starts
-        section_height: height allocated for this section
-        """
-        if len(values) < 2:
-            return
-        
-        # Define the section bounds
-        section_y = panel_y + section_offset
-        section_bottom = section_y + section_height
-        
-        prev = None
-        for i, v in enumerate(values):
-            x = panel_x + 2 + (i / GRAPH_MAX_POINTS) * (panel_w - 4)
-            # Scale value (0-100) to section height, baseline at bottom
-            y = section_bottom - (v / 100.0) * section_height
-            # Clamp y to section bounds
-            y = max(section_y, min(section_bottom, y))
-            
-            if prev:
-                pygame.draw.line(surface, color, prev, (x, y), 2)
-            prev = (x, y)
-
-    # Divide panel into 3 sections for CPU, RAM, GPU
-    section_h = panel_h // 3
-    
-    # -------- CPU Graph (Green) - Top Section --------
-    draw_line_graph(CPU_GRAPH, (80, 220, 120), 10, section_h - 15)
-
-    # -------- RAM Graph (Purple) - Middle Section --------
-    draw_line_graph(RAM_GRAPH, (160, 80, 255), section_h + 10, section_h - 15)
-
-    # -------- GPU Graph (Orange) - Bottom Section --------
-    if gpu_usage is not None:
-        draw_line_graph(GPU_GRAPH, (255, 180, 80), section_h * 2 + 10, section_h - 15)
-
-    # -------- Text Labels --------
-    label_cpu = font_tiny.render(f"CPU: {cpu_usage:.1f} %", True, (200, 255, 200))
-    label_ram = font_tiny.render(f"Memory: {ram_usage:.1f} %", True, (230, 200, 255))
-    if gpu_usage is not None:
-        used, total = GPU_STATS["memory"]
-        label_gpu_text = f"GPU: {gpu_usage:.1f}%  VRAM: {used:.0f}/{total:.0f} MB"
-    else:
-        label_gpu_text = "GPU: unavailable"
-    label_gpu = font_tiny.render(label_gpu_text, True, (255, 220, 170))
-
-    surface.blit(label_cpu, (panel_x + 10, panel_y + 10))
-    surface.blit(label_ram, (panel_x + 10, panel_y + 90))
-    surface.blit(label_gpu, (panel_x + 10, panel_y + 170))
+def clear_chat_history():
+    global CHAT_MESSAGES, LAST_CHAT_SIGNATURE, ACTION_STATUS, ACTION_STATUS_UNTIL
+    try:
+        with open(CHAT_BRIDGE_FILE, "w", encoding="utf-8") as f:
+            json.dump([], f)
+        CHAT_MESSAGES.clear()
+        LAST_CHAT_SIGNATURE = None
+        ACTION_STATUS = "CHAT SESSION CLEARED"
+        ACTION_STATUS_UNTIL = pygame.time.get_ticks() + 2000
+    except Exception as e:
+        ACTION_STATUS = f"CLEAR ERROR: {e}"
+        ACTION_STATUS_UNTIL = pygame.time.get_ticks() + 2000
 
 
 def fetch_chat_from_backend():
@@ -627,120 +418,474 @@ def fetch_chat_from_backend():
                     break
                 common_prefix += 1
 
-            # Rebuild when the bridge was cleared, rotated, or edited.
             new_msgs = data[common_prefix:]
             if common_prefix == 0:
                 CHAT_MESSAGES.clear()
 
             for msg in new_msgs:
-                prefix = "You" if msg.get("role") == "user" else "Neura"
-                CHAT_MESSAGES.append(f"{prefix}: {msg.get('message', '')}")
+                role = msg.get("role", "neura")
+                text = msg.get("message", "")
+                mtime = msg.get("time", "")
+                CHAT_MESSAGES.append({"role": role, "message": text, "time": mtime})
                 CHAT_SCROLL_OFFSET = 0
             LAST_CHAT_SIGNATURE = signature
 
-    except (OSError, json.JSONDecodeError, TypeError) as e:
-        # The backend may be between truncate and write; retry on the next frame.
-        if not isinstance(e, json.JSONDecodeError):
-            print("Frontend chat read error:", e)
+    except (OSError, json.JSONDecodeError, TypeError):
+        pass
 
-# -------------------- Conversation Pannel --------------------
+
+def update_assistant_status():
+    global ASSISTANT_STATUS, LAST_STATUS_CHECK
+    now = time.time()
+    if now - LAST_STATUS_CHECK < 0.2:
+        return
+    LAST_STATUS_CHECK = now
+    if os.path.exists(STATUS_BRIDGE_FILE):
+        try:
+            with open(STATUS_BRIDGE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                stat = data.get("status", "READY")
+                ASSISTANT_STATUS = stat
+        except Exception:
+            pass
+
+
+# -------------------- TOP CYBER HEADER BAR --------------------
+def draw_header_bar(surface):
+    global current_theme, ULTRA_BOLD, MIC_MUTED, CAMERA_ENABLED
+    header_rect = LAYOUT["header"]
+    theme = THEMES.get(current_theme, THEMES[1])
+    accent = theme["primary"]
+
+    # Header Background
+    header_surf = pygame.Surface((header_rect.width, header_rect.height), pygame.SRCALPHA)
+    header_surf.fill((8, 13, 28, 240))
+    surface.blit(header_surf, (0, 0))
+    pygame.draw.line(surface, (30, 52, 95), (0, header_rect.bottom - 1), (WIDTH, header_rect.bottom - 1), 1)
+    pygame.draw.line(surface, accent, (0, header_rect.bottom - 2), (260, header_rect.bottom - 2), 2)
+
+    mouse_pos = pygame.mouse.get_pos()
+
+    # 1. Branding / Logo
+    logo_font = pygame.font.SysFont("consolas", 16, bold=True)
+    tag_font = pygame.font.SysFont("consolas", 10, bold=True)
+
+    logo_text = logo_font.render("NEURA", True, (245, 250, 255))
+    surface.blit(logo_text, (18, 12))
+
+    core_tag = tag_font.render("// COGNITIVE CORE v2.5", True, accent)
+    surface.blit(core_tag, (76, 17))
+
+    # 2. Status Badge with pulsing indicator
+    pulse = (math.sin(pygame.time.get_ticks() * 0.006) + 1.0) * 0.5
+    status_x = 290
+    status_y = 14
+    status_w = 140
+    status_h = 24
+    status_rect = pygame.Rect(status_x, status_y, status_w, status_h)
+
+    pygame.draw.rect(surface, (14, 24, 48), status_rect, border_radius=12)
+    pygame.draw.rect(surface, (38, 65, 115), status_rect, 1, border_radius=12)
+
+    # Status color
+    if ASSISTANT_STATUS == "LISTENING":
+        dot_color = (80, 255, 140)
+    elif ASSISTANT_STATUS == "SPEAKING":
+        dot_color = (255, 180, 60)
+    elif ASSISTANT_STATUS == "PROCESSING":
+        dot_color = (180, 100, 255)
+    else:
+        dot_color = (0, 220, 255)
+
+    dot_r = 4 + int(pulse * 2)
+    pygame.draw.circle(surface, dot_color, (status_x + 14, status_y + 12), dot_r)
+
+    status_font = pygame.font.SysFont("consolas", 10, bold=True)
+    stat_surf = status_font.render(ASSISTANT_STATUS, True, (220, 235, 255))
+    surface.blit(stat_surf, (status_x + 26, status_y + 6))
+
+    # 3. Interactive Theme Selectors
+    theme_x = 460
+    theme_btn_w = 54
+    theme_btn_h = 24
+    theme_font = pygame.font.SysFont("consolas", 9, bold=True)
+
+    theme_names = {1: "GOLD", 2: "PURP", 3: "RED", 4: "BIO"}
+    for t_id in range(1, 5):
+        btn_rect = pygame.Rect(theme_x + (t_id - 1) * (theme_btn_w + 6), 14, theme_btn_w, theme_btn_h)
+        is_active = (current_theme == t_id)
+        is_hov = btn_rect.collidepoint(mouse_pos)
+
+        t_accent = THEMES[t_id]["primary"]
+        bg_col = (25, 42, 75) if is_hov else ((18, 30, 56) if is_active else (12, 19, 38))
+
+        pygame.draw.rect(surface, bg_col, btn_rect, border_radius=5)
+        border_col = t_accent if (is_active or is_hov) else (32, 54, 90)
+        pygame.draw.rect(surface, border_col, btn_rect, 2 if is_active else 1, border_radius=5)
+
+        pygame.draw.circle(surface, t_accent, (btn_rect.x + 8, btn_rect.y + 12), 3)
+        t_label = theme_font.render(theme_names[t_id], True, (240, 245, 255) if is_active else (160, 185, 215))
+        surface.blit(t_label, (btn_rect.x + 16, btn_rect.y + 7))
+
+    # 4. Controls: MIC, CAM, BOLD, CLEAR
+    ctrl_x = WIDTH - 390
+    ctrl_btn_w = 64
+    ctrl_btn_h = 24
+    ctrl_font = pygame.font.SysFont("consolas", 10, bold=True)
+
+    controls = [
+        ("MIC", not MIC_MUTED, (80, 220, 120) if not MIC_MUTED else (255, 80, 80)),
+        ("CAM", CAMERA_ENABLED, (80, 200, 255) if CAMERA_ENABLED else (140, 150, 170)),
+        ("BOLD", ULTRA_BOLD, accent if ULTRA_BOLD else (130, 150, 180)),
+        ("CLR", False, (220, 100, 120)),
+    ]
+
+    for i, (label, active, col) in enumerate(controls):
+        btn_rect = pygame.Rect(ctrl_x + i * (ctrl_btn_w + 6), 14, ctrl_btn_w, ctrl_btn_h)
+        is_hov = btn_rect.collidepoint(mouse_pos)
+        fill = (22, 36, 68) if is_hov else (14, 22, 42)
+        pygame.draw.rect(surface, fill, btn_rect, border_radius=5)
+        pygame.draw.rect(surface, col if (active or is_hov) else (35, 55, 95), btn_rect, 1, border_radius=5)
+
+        lbl = ctrl_font.render(label, True, col if active else (180, 200, 225))
+        surface.blit(lbl, lbl.get_rect(center=(btn_rect.centerx, btn_rect.centery)))
+
+    # 5. Live Digital Clock
+    clock_str = datetime.datetime.now().strftime("%H:%M:%S")
+    clock_font = pygame.font.SysFont("consolas", 13, bold=True)
+    c_surf = clock_font.render(clock_str, True, (210, 235, 255))
+    surface.blit(c_surf, (WIDTH - c_surf.get_width() - 20, 18))
+
+
+def get_header_button_rects():
+    theme_x = 460
+    theme_btn_w = 54
+    theme_btn_h = 24
+    theme_rects = [
+        (t_id, pygame.Rect(theme_x + (t_id - 1) * (theme_btn_w + 6), 14, theme_btn_w, theme_btn_h))
+        for t_id in range(1, 5)
+    ]
+
+    ctrl_x = WIDTH - 390
+    ctrl_btn_w = 64
+    ctrl_btn_h = 24
+    ctrl_rects = {
+        "MIC": pygame.Rect(ctrl_x + 0 * (ctrl_btn_w + 6), 14, ctrl_btn_w, ctrl_btn_h),
+        "CAM": pygame.Rect(ctrl_x + 1 * (ctrl_btn_w + 6), 14, ctrl_btn_w, ctrl_btn_h),
+        "BOLD": pygame.Rect(ctrl_x + 2 * (ctrl_btn_w + 6), 14, ctrl_btn_w, ctrl_btn_h),
+        "CLR": pygame.Rect(ctrl_x + 3 * (ctrl_btn_w + 6), 14, ctrl_btn_w, ctrl_btn_h),
+    }
+    return theme_rects, ctrl_rects
+
+
+# -------------------- CHAT & CONVERSATION PANEL --------------------
 def draw_chat_panel(surface):
-    # Medium size, positioned just below the top-left analytics panel
-    panel_w = 300
-    panel_h = int(HEIGHT * 0.5)
-    panel_x = 20
-    # Top-left analytics: info_y=20, info_h=110; add a slight gap (12px)
-    panel_y = 20 + 110 + 12
+    panel_rect = LAYOUT["chat_panel"]
+    theme = THEMES.get(current_theme, THEMES[1])
+    accent = theme["primary"]
 
-    bg = (10, 15, 35)
-    border = (40, 80, 160)
-
-    panel_rect = pygame.Rect(panel_x, panel_y, panel_w, panel_h)
-    pygame.draw.rect(surface, bg, panel_rect, border_radius=10)
-    pygame.draw.rect(surface, border, panel_rect, 1, border_radius=10)
-
-    font = pygame.font.SysFont("consolas", 15)
+    draw_glass_panel(surface, panel_rect, "NEURAL CONVERSATION FEED", accent, f"{len(CHAT_MESSAGES)} TURNS")
 
     inner_pad = 12
-    inner_x = panel_x + inner_pad
-    inner_y = panel_y + inner_pad + 3
-    inner_w = panel_w - inner_pad * 2
-    line_h = font.get_linesize()
+    view_x = panel_rect.x + inner_pad
+    view_y = panel_rect.y + 36
+    view_w = panel_rect.width - inner_pad * 2
+    view_h = panel_rect.height - 46
 
-    # Collect wrapped lines for all messages
-    all_lines = []
-    for msg in CHAT_MESSAGES:
-        wrapped = wrap_text(font, msg, inner_w)
-        all_lines.extend(wrapped)
-
-    # Compute how many lines fit vertically
-    max_lines = max(0, (panel_h - inner_pad * 2) // line_h)
-    max_scroll = max(0, len(all_lines) - max_lines)
-    scroll = min(CHAT_SCROLL_OFFSET, max_scroll)
-    start_idx = max(0, len(all_lines) - max_lines - scroll)
-
-    # Clip drawing to panel to prevent overflow
+    # Inner clipping area
+    view_rect = pygame.Rect(view_x, view_y, view_w, view_h)
     prev_clip = surface.get_clip()
-    surface.set_clip(panel_rect)
+    surface.set_clip(view_rect)
 
-    y = inner_y
-    for line in all_lines[start_idx:]:
-        text = font.render(line, True, (200, 220, 255))
-        surface.blit(text, (inner_x, y))
-        y += line_h
+    font_msg = pygame.font.SysFont("consolas", 12)
+    font_meta = pygame.font.SysFont("consolas", 9, bold=True)
+
+    bubble_pad = 7
+    card_spacing = 8
+    max_bubble_w = int(view_w * 0.90)
+
+    # Pre-render cards to calculate total scrollable height
+    rendered_cards = []
+    total_content_h = 0
+
+    for msg in CHAT_MESSAGES:
+        role = msg.get("role", "neura")
+        text = msg.get("message", "")
+        mtime = msg.get("time", "")
+
+        is_user = (role == "user")
+        wrapped_lines = wrap_text(font_msg, text, max_bubble_w - (bubble_pad * 2))
+        line_h = font_msg.get_linesize()
+        bubble_h = max(24, len(wrapped_lines) * line_h) + bubble_pad * 2 + 16
+
+        rendered_cards.append({
+            "is_user": is_user,
+            "role_label": "YOU" if is_user else "NEURA",
+            "lines": wrapped_lines,
+            "time": mtime,
+            "height": bubble_h,
+            "line_h": line_h
+        })
+        total_content_h += bubble_h + card_spacing
+
+    max_scroll = max(0, total_content_h - view_h)
+    scroll = min(CHAT_SCROLL_OFFSET, max_scroll)
+
+    draw_y = view_y + view_h - total_content_h + scroll
+    if total_content_h < view_h:
+        draw_y = view_y
+
+    for card in rendered_cards:
+        c_h = card["height"]
+        if draw_y + c_h >= view_y and draw_y <= view_y + view_h:
+            card_w = max_bubble_w
+            if card["is_user"]:
+                card_x = view_x + (view_w - card_w)
+                card_bg = (18, 30, 60, 220)
+                card_border = (45, 90, 160)
+                role_col = (110, 200, 255)
+            else:
+                card_x = view_x
+                card_bg = (24, 18, 48, 220) if current_theme == 2 else (28, 26, 46, 220)
+                card_border = theme["primary_soft"]
+                role_col = accent
+
+            b_rect = pygame.Rect(card_x, draw_y, card_w, c_h)
+            card_surf = pygame.Surface((card_w, c_h), pygame.SRCALPHA)
+            card_surf.fill(card_bg)
+            surface.blit(card_surf, (card_x, draw_y))
+            pygame.draw.rect(surface, card_border, b_rect, 1, border_radius=6)
+
+            # Header inside bubble: Role & Timestamp
+            r_surf = font_meta.render(card["role_label"], True, role_col)
+            surface.blit(r_surf, (card_x + bubble_pad, draw_y + bubble_pad - 1))
+
+            if card["time"]:
+                t_surf = font_meta.render(card["time"], True, (130, 155, 190))
+                surface.blit(t_surf, (card_x + card_w - t_surf.get_width() - bubble_pad, draw_y + bubble_pad - 1))
+
+            # Lines of message
+            text_y = draw_y + bubble_pad + 16
+            for line in card["lines"]:
+                line_surf = font_msg.render(line, True, COLOR_TEXT_WHITE)
+                surface.blit(line_surf, (card_x + bubble_pad, text_y))
+                text_y += card["line_h"]
+
+        draw_y += c_h + card_spacing
 
     surface.set_clip(prev_clip)
 
+    # Scrollbar indicator if scrollable
+    if max_scroll > 0:
+        bar_w = 3
+        bar_x = panel_rect.right - 8
+        bar_track_h = view_h
+        thumb_h = max(20, int(bar_track_h * (view_h / total_content_h)))
+        thumb_y = view_y + int((bar_track_h - thumb_h) * (1.0 - (scroll / max_scroll)))
 
-def panel_frame(surface, rect, accent=(0, 180, 255), title=""):
-    """Draw the shared glass-like panel treatment used by the side modules."""
-    pygame.draw.rect(surface, (9, 14, 32), rect, border_radius=10)
-    pygame.draw.rect(surface, (35, 62, 112), rect, 1, border_radius=10)
-    pygame.draw.line(surface, accent, (rect.x + 12, rect.y + 1), (rect.x + 72, rect.y + 1), 2)
-    if title:
-        title_font = pygame.font.SysFont("consolas", 13, bold=True)
-        surface.blit(title_font.render(title, True, (190, 220, 250)), (rect.x + 12, rect.y + 9))
+        pygame.draw.rect(surface, (20, 35, 65), (bar_x, view_y, bar_w, bar_track_h), border_radius=2)
+        pygame.draw.rect(surface, accent, (bar_x, thumb_y, bar_w, thumb_h), border_radius=2)
 
 
+# -------------------- QUICK PROMPT ACTION CHIPS --------------------
 def get_quick_action_rects():
-    panel_x = 20
-    panel_y = 20 + 110 + 12 + int(HEIGHT * 0.5) + 12
-    panel_w = 300
-    panel_h = 92
-    button_gap = 7
-    button_w = (panel_w - 24 - button_gap * 3) // 4
-    return [
-        pygame.Rect(panel_x + 12 + i * (button_w + button_gap), panel_y + 32, button_w, 47)
-        for i in range(len(QUICK_ACTIONS))
-    ]
+    panel_rect = LAYOUT["quick_actions"]
+    pad_x = 10
+    pad_y = 26
+    avail_w = panel_rect.width - pad_x * 2
+    avail_h = panel_rect.height - pad_y - 8
+
+    cols = 3
+    rows = 2
+    btn_w = (avail_w - (cols - 1) * 6) // cols
+    btn_h = (avail_h - (rows - 1) * 6) // rows
+
+    rects = []
+    for i in range(len(QUICK_ACTIONS)):
+        r = i // cols
+        c = i % cols
+        bx = panel_rect.x + pad_x + c * (btn_w + 6)
+        by = panel_rect.y + pad_y + r * (btn_h + 6)
+        rects.append(pygame.Rect(bx, by, btn_w, btn_h))
+    return rects
 
 
 def draw_quick_actions(surface):
-    panel_x = 20
-    panel_y = 20 + 110 + 12 + int(HEIGHT * 0.5) + 12
-    panel_rect = pygame.Rect(panel_x, panel_y, 300, 92)
-    panel_frame(surface, panel_rect, (255, 180, 80), "QUICK ACTIONS")
+    panel_rect = LAYOUT["quick_actions"]
+    theme = THEMES.get(current_theme, THEMES[1])
+    accent = theme["primary"]
+
+    draw_glass_panel(surface, panel_rect, "TACTICAL COMMAND CHIPS", (255, 180, 80))
 
     mouse_pos = pygame.mouse.get_pos()
-    label_font = pygame.font.SysFont("consolas", 11, bold=True)
-    hint_font = pygame.font.SysFont("consolas", 10)
-    for rect, (label, _, accent) in zip(get_quick_action_rects(), QUICK_ACTIONS):
-        hovered = rect.collidepoint(mouse_pos)
-        fill = (25, 38, 65) if hovered else (15, 24, 48)
-        pygame.draw.rect(surface, fill, rect, border_radius=7)
-        pygame.draw.rect(surface, accent, rect, 2 if hovered else 1, border_radius=7)
-        pygame.draw.circle(surface, accent, (rect.centerx, rect.y + 14), 4)
-        text = label_font.render(label, True, (225, 235, 255))
-        surface.blit(text, text.get_rect(center=(rect.centerx, rect.y + 31)))
+    label_font = pygame.font.SysFont("consolas", 10, bold=True)
 
+    rects = get_quick_action_rects()
+    for rect, (label, _, _, col) in zip(rects, QUICK_ACTIONS):
+        is_hov = rect.collidepoint(mouse_pos)
+        fill_col = (25, 38, 70) if is_hov else (14, 22, 45)
+        border_col = col if is_hov else (32, 52, 90)
+
+        pygame.draw.rect(surface, fill_col, rect, border_radius=4)
+        pygame.draw.rect(surface, border_col, rect, 2 if is_hov else 1, border_radius=4)
+
+        # Micro dot indicator
+        pygame.draw.circle(surface, col, (rect.x + 8, rect.centery), 3)
+
+        lbl = label_font.render(label, True, (240, 248, 255) if is_hov else (175, 195, 225))
+        surface.blit(lbl, (rect.x + 16, rect.centery - lbl.get_height() // 2))
+
+
+def activate_quick_action(action_key, prompt_text):
     global ACTION_STATUS, ACTION_STATUS_UNTIL
-    status = ACTION_STATUS if pygame.time.get_ticks() < ACTION_STATUS_UNTIL else "READY FOR COMMAND"
-    status_surf = hint_font.render(status, True, (125, 160, 205))
-    surface.blit(status_surf, (panel_x + 12, panel_y + 75))
+    if action_key == "music":
+        webbrowser.open("https://www.youtube.com")
+        ACTION_STATUS = "OPENED: YOUTUBE MEDIA"
+    elif action_key == "files":
+        os.startfile(os.path.expanduser("~"))
+        ACTION_STATUS = "OPENED: EXPLORER HOME"
+    elif action_key == "taskmgr":
+        subprocess.Popen(["taskmgr.exe"])
+        ACTION_STATUS = "LAUNCHED: TASK MANAGER"
+    else:
+        # Dispatch prompt directly to Neura assistant backend!
+        send_command_to_backend(prompt_text)
+        ACTION_STATUS = f"SENT: {prompt_text.upper()}"
+
+    ACTION_STATUS_UNTIL = pygame.time.get_ticks() + 2500
 
 
+# -------------------- INTERACTIVE TEXT INPUT BAR --------------------
+def get_send_button_rect():
+    box_rect = LAYOUT["input_box"]
+    btn_w = 60
+    btn_h = box_rect.height - 8
+    btn_x = box_rect.right - btn_w - 4
+    btn_y = box_rect.y + 4
+    return pygame.Rect(btn_x, btn_y, btn_w, btn_h)
+
+
+def draw_input_box(surface):
+    global CURSOR_VISIBLE, LAST_CURSOR_BLINK
+    box_rect = LAYOUT["input_box"]
+    theme = THEMES.get(current_theme, THEMES[1])
+    accent = theme["primary"]
+
+    mouse_pos = pygame.mouse.get_pos()
+    is_hov = box_rect.collidepoint(mouse_pos)
+
+    # Input Container
+    bg_col = (12, 20, 42) if INPUT_ACTIVE else (9, 15, 32)
+    border_col = accent if (INPUT_ACTIVE or is_hov) else (35, 58, 105)
+
+    pygame.draw.rect(surface, bg_col, box_rect, border_radius=6)
+    pygame.draw.rect(surface, border_col, box_rect, 2 if INPUT_ACTIVE else 1, border_radius=6)
+
+    # Input text font
+    font = pygame.font.SysFont("consolas", 12)
+    send_rect = get_send_button_rect()
+    text_avail_w = send_rect.x - box_rect.x - 20
+
+    # Draw text or placeholder
+    now_ms = pygame.time.get_ticks()
+    if now_ms - LAST_CURSOR_BLINK > 500:
+        CURSOR_VISIBLE = not CURSOR_VISIBLE
+        LAST_CURSOR_BLINK = now_ms
+
+    if USER_INPUT_TEXT:
+        # Trim from left if text exceeds width
+        disp_text = USER_INPUT_TEXT
+        while disp_text and font.size(disp_text)[0] > text_avail_w:
+            disp_text = disp_text[1:]
+        t_surf = font.render(disp_text, True, COLOR_TEXT_WHITE)
+        surface.blit(t_surf, (box_rect.x + 10, box_rect.centery - t_surf.get_height() // 2))
+
+        if INPUT_ACTIVE and CURSOR_VISIBLE:
+            cx = box_rect.x + 10 + t_surf.get_width() + 2
+            cy = box_rect.centery - 8
+            pygame.draw.line(surface, accent, (cx, cy), (cx, cy + 16), 2)
+    else:
+        ph_surf = font.render("Type command or ask Neura (Enter to send)...", True, (100, 130, 170))
+        surface.blit(ph_surf, (box_rect.x + 10, box_rect.centery - ph_surf.get_height() // 2))
+        if INPUT_ACTIVE and CURSOR_VISIBLE:
+            pygame.draw.line(surface, accent, (box_rect.x + 10, box_rect.centery - 8), (box_rect.x + 10, box_rect.centery + 8), 2)
+
+    # Send Button
+    btn_hov = send_rect.collidepoint(mouse_pos)
+    btn_bg = accent if btn_hov else (20, 35, 68)
+    pygame.draw.rect(surface, btn_bg, send_rect, border_radius=4)
+    pygame.draw.rect(surface, accent, send_rect, 1, border_radius=4)
+
+    btn_font = pygame.font.SysFont("consolas", 10, bold=True)
+    b_text = btn_font.render("SEND ►", True, (10, 18, 32) if btn_hov else (220, 240, 255))
+    surface.blit(b_text, b_text.get_rect(center=send_rect.center))
+
+
+# -------------------- OPTICS / CAMERA VIEW MODULE --------------------
+def draw_camera_panel(surface, t):
+    global CAMERA_SURFACE, CAMERA_ENABLED
+    panel_rect = LAYOUT["cam_panel"]
+    accent = (0, 200, 255)
+
+    badge = "REC ● LIVE" if CAMERA_ENABLED else "STANDBY"
+    draw_glass_panel(surface, panel_rect, "NEURA OPTICS // SCANNER", accent, badge)
+
+    cam_inner_x = panel_rect.x + 8
+    cam_inner_y = panel_rect.y + 28
+    cam_inner_w = panel_rect.width - 16
+    cam_inner_h = panel_rect.height - 36
+    inner_rect = pygame.Rect(cam_inner_x, cam_inner_y, cam_inner_w, cam_inner_h)
+
+    if CAMERA_ENABLED and CAMERA_SURFACE is not None:
+        scaled = pygame.transform.scale(CAMERA_SURFACE, (cam_inner_w, cam_inner_h))
+        surface.blit(scaled, (cam_inner_x, cam_inner_y))
+
+        # Sci-Fi Viewfinder Overlay
+        # Scanlines
+        scan_step = 6
+        for sy in range(cam_inner_y, cam_inner_y + cam_inner_h, scan_step):
+            pygame.draw.line(surface, (10, 20, 45), (cam_inner_x, sy), (cam_inner_x + cam_inner_w, sy), 1)
+
+        # Center Reticle
+        cx, cy = inner_rect.centerx, inner_rect.centery
+        pygame.draw.circle(surface, (0, 220, 255), (cx, cy), 14, 1)
+        pygame.draw.line(surface, (0, 220, 255), (cx - 20, cy), (cx - 8, cy), 1)
+        pygame.draw.line(surface, (0, 220, 255), (cx + 8, cy), (cx + 20, cy), 1)
+        pygame.draw.line(surface, (0, 220, 255), (cx, cy - 20), (cx, cy - 8), 1)
+        pygame.draw.line(surface, (0, 220, 255), (cx, cy + 8), (cx, cy + 20), 1)
+
+        # Tech telemetry text
+        font_tech = pygame.font.SysFont("consolas", 8, bold=True)
+        surface.blit(font_tech.render("FOV 84° // HD 1080P", True, (0, 220, 255)), (cam_inner_x + 6, cam_inner_y + 4))
+        surface.blit(font_tech.render("LOCK: TRACKING", True, (0, 220, 255)), (cam_inner_x + 6, cam_inner_y + cam_inner_h - 14))
+    else:
+        # Standby Animated Cyber Radar Display
+        pygame.draw.rect(surface, (8, 14, 30), inner_rect, border_radius=4)
+        cx, cy = inner_rect.centerx, inner_rect.centery
+        r_max = min(cam_inner_w, cam_inner_h) // 2 - 8
+
+        # Radar concentric rings
+        pygame.draw.circle(surface, (20, 40, 75), (cx, cy), r_max // 3, 1)
+        pygame.draw.circle(surface, (25, 50, 90), (cx, cy), (r_max * 2) // 3, 1)
+        pygame.draw.circle(surface, (30, 60, 110), (cx, cy), r_max, 1)
+
+        # Crosshairs
+        pygame.draw.line(surface, (25, 45, 80), (cx - r_max, cy), (cx + r_max, cy), 1)
+        pygame.draw.line(surface, (25, 45, 80), (cx, cy - r_max), (cx, cy + r_max), 1)
+
+        # Rotating sweep line
+        ang = (t * 0.002) % (2 * math.pi)
+        sx = cx + int(r_max * math.cos(ang))
+        sy = cy + int(r_max * math.sin(ang))
+        pygame.draw.line(surface, (0, 180, 255), (cx, cy), (sx, sy), 2)
+
+        font_cam = pygame.font.SysFont("consolas", 10, bold=True)
+        msg = font_cam.render("OPTICS STANDBY // PRIVACY MODE", True, (130, 160, 200))
+        surface.blit(msg, msg.get_rect(center=(cx, cy + r_max // 2 + 12)))
+
+
+# -------------------- NEURAL MEMORY CORE MODULE --------------------
 def load_memory_snapshot():
-    """Load the persisted memory files at a low frequency for the HUD."""
     now = pygame.time.get_ticks() / 1000.0
     if now - MEMORY_CACHE["updated_at"] < 1.0:
         return MEMORY_CACHE["data"]
@@ -761,12 +906,8 @@ def load_memory_snapshot():
 
 
 def draw_memory_panel(surface):
-    panel_w = 300
-    panel_x = WIDTH - panel_w - 20
-    panel_y = 292
-    panel_h = 184
-    panel_rect = pygame.Rect(panel_x, panel_y, panel_w, panel_h)
-    panel_frame(surface, panel_rect, (150, 220, 130), "MEMORY CORE")
+    panel_rect = LAYOUT["mem_panel"]
+    draw_glass_panel(surface, panel_rect, "NEURAL MEMORY MATRIX", (140, 230, 150))
 
     snapshot = load_memory_snapshot()
     user_memory = snapshot.get("user", {})
@@ -776,155 +917,477 @@ def draw_memory_panel(surface):
     activity = user_memory.get("activity_log", [])
     recent = conversation.get("recent_messages", [])
 
-    font = pygame.font.SysFont("consolas", 12)
-    tiny = pygame.font.SysFont("consolas", 10)
-    name = facts.get("name") or "Unknown user"
-    preference_count = len([value for value in preferences.values() if value])
-    fact_count = len([value for value in facts.values() if value])
+    font_main = pygame.font.SysFont("consolas", 11, bold=True)
+    font_sub = pygame.font.SysFont("consolas", 10)
+    font_tiny = pygame.font.SysFont("consolas", 9)
+
+    name = facts.get("name") or "User"
+    preference_count = len([v for v in preferences.values() if v])
+    fact_count = len([v for v in facts.values() if v])
     memory_score = min(100, preference_count * 12 + fact_count * 14 + min(len(activity), 10) * 2)
 
-    surface.blit(font.render(f"PROFILE  {name}", True, (215, 240, 215)), (panel_x + 12, panel_y + 35))
-    surface.blit(tiny.render(f"{len(activity)} activities   {len(recent)} recent turns", True, (145, 180, 165)), (panel_x + 12, panel_y + 54))
+    px = panel_rect.x + 12
+    py = panel_rect.y + 32
 
-    bar_rect = pygame.Rect(panel_x + 12, panel_y + 74, panel_w - 24, 8)
-    pygame.draw.rect(surface, (24, 42, 55), bar_rect, border_radius=4)
-    fill_rect = bar_rect.copy()
-    fill_rect.width = int(bar_rect.width * memory_score / 100)
-    if fill_rect.width:
-        pygame.draw.rect(surface, (120, 220, 145), fill_rect, border_radius=4)
-    surface.blit(tiny.render(f"MEMORY INDEX  {memory_score:02d}%", True, (150, 220, 170)), (panel_x + 12, panel_y + 88))
+    # Identity pill
+    id_text = font_main.render(f"PROFILE: {name.upper()}", True, (220, 245, 220))
+    surface.blit(id_text, (px, py))
 
+    stat_text = font_sub.render(f"{len(activity)} activities  |  {len(recent)} recent turns", True, (140, 180, 160))
+    surface.blit(stat_text, (px, py + 18))
+
+    # Retention Gauge Bar
+    bar_y = py + 38
+    bar_w = panel_rect.width - 24
+    bar_h = 7
+    bar_rect = pygame.Rect(px, bar_y, bar_w, bar_h)
+    pygame.draw.rect(surface, (20, 36, 50), bar_rect, border_radius=3)
+
+    fill_w = int(bar_w * (memory_score / 100.0))
+    if fill_w > 0:
+        fill_rect = pygame.Rect(px, bar_y, fill_w, bar_h)
+        pygame.draw.rect(surface, (120, 230, 150), fill_rect, border_radius=3)
+
+    gauge_lbl = font_tiny.render(f"RETENTION INDEX: {memory_score:02d}%", True, (140, 220, 165))
+    surface.blit(gauge_lbl, (px, bar_y + 11))
+
+    # Latest memory snippet
     latest = recent[-1] if recent else {}
-    latest_text = latest.get("content", "No recent memory captured.").replace("\n", " ")
-    latest_text = latest_text[:37] + ("..." if len(latest_text) > 37 else "")
-    surface.blit(tiny.render("LATEST TRACE", True, (115, 160, 205)), (panel_x + 12, panel_y + 111))
-    surface.blit(font.render(latest_text, True, (205, 220, 240)), (panel_x + 12, panel_y + 128))
-    summary = conversation.get("summary", "")
-    summary_text = summary[:42] + ("..." if len(summary) > 42 else "")
-    surface.blit(tiny.render(summary_text or "Conversation memory is ready.", True, (135, 165, 195)), (panel_x + 12, panel_y + 149))
+    latest_text = latest.get("content", "Memory core initialized and receptive.").replace("\n", " ")
+    max_char = int(panel_rect.width / 8.5)
+    latest_text = latest_text[:max_char] + ("..." if len(latest_text) > max_char else "")
+
+    trace_y = bar_y + 28
+    surface.blit(font_tiny.render("LATEST CONTEXT TRACE:", True, (110, 160, 205)), (px, trace_y))
+    surface.blit(font_sub.render(latest_text, True, (205, 225, 245)), (px, trace_y + 14))
 
 
-def activate_quick_action(action):
+# -------------------- HARDWARE PERFORMANCE MODULE --------------------
+def draw_performance_panel(surface):
+    panel_rect = LAYOUT["perf_panel"]
+    draw_glass_panel(surface, panel_rect, "HARDWARE TELEMETRY // STATS", (80, 220, 120))
+
+    # Gather system usage
+    cpu_usage = psutil.cpu_percent(interval=0)
+    ram_info = psutil.virtual_memory()
+    ram_usage = ram_info.percent
+
+    now = pygame.time.get_ticks() / 1000.0
+    if now - GPU_STATS["updated_at"] >= 0.5:
+        GPU_STATS["updated_at"] = now
+        try:
+            result = subprocess.run(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=utilization.gpu,memory.used,memory.total",
+                    "--format=csv,noheader,nounits",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=0.25,
+                check=False,
+            )
+            values = result.stdout.strip().split(",")
+            if result.returncode == 0 and len(values) >= 3:
+                GPU_STATS["usage"] = float(values[0].strip())
+                GPU_STATS["memory"] = (float(values[1].strip()), float(values[2].strip()))
+            else:
+                GPU_STATS["usage"] = None
+                GPU_STATS["memory"] = None
+        except Exception:
+            GPU_STATS["usage"] = None
+            GPU_STATS["memory"] = None
+
+    gpu_usage = GPU_STATS["usage"]
+
+    CPU_GRAPH.append(cpu_usage)
+    RAM_GRAPH.append(ram_usage)
+    GPU_GRAPH.append(gpu_usage if gpu_usage is not None else 0)
+
+    CPU_GRAPH[:] = CPU_GRAPH[-GRAPH_MAX_POINTS:]
+    RAM_GRAPH[:] = RAM_GRAPH[-GRAPH_MAX_POINTS:]
+    GPU_GRAPH[:] = GPU_GRAPH[-GRAPH_MAX_POINTS:]
+
+    # Grid box
+    graph_x = panel_rect.x + 10
+    graph_y = panel_rect.y + 32
+    graph_w = panel_rect.width - 20
+    graph_h = panel_rect.height - 42
+
+    pygame.draw.rect(surface, (8, 14, 30), (graph_x, graph_y, graph_w, graph_h), border_radius=4)
+    pygame.draw.rect(surface, (25, 45, 80), (graph_x, graph_y, graph_w, graph_h), 1, border_radius=4)
+
+    # Grid lines
+    cols = 8
+    rows = 4
+    for i in range(1, cols):
+        gx = graph_x + (i * graph_w) // cols
+        pygame.draw.line(surface, (18, 30, 56), (gx, graph_y), (gx, graph_y + graph_h), 1)
+    for j in range(1, rows):
+        gy = graph_y + (j * graph_h) // rows
+        pygame.draw.line(surface, (18, 30, 56), (graph_x, gy), (graph_x + graph_w, gy), 1)
+
+    # Plot lines helper
+    def draw_graph_line(history, color):
+        if len(history) < 2:
+            return
+        pts = []
+        for idx, val in enumerate(history):
+            px = graph_x + int((idx / (GRAPH_MAX_POINTS - 1)) * graph_w)
+            py = graph_y + graph_h - int((val / 100.0) * graph_h)
+            py = max(graph_y, min(graph_y + graph_h, py))
+            pts.append((px, py))
+        pygame.draw.lines(surface, color, False, pts, 2)
+
+    draw_graph_line(CPU_GRAPH, (80, 220, 120))
+    draw_graph_line(RAM_GRAPH, (170, 90, 255))
+    if gpu_usage is not None:
+        draw_graph_line(GPU_GRAPH, (255, 180, 80))
+
+    # Metric Badges
+    font_tiny = pygame.font.SysFont("consolas", 9, bold=True)
+    surface.blit(font_tiny.render(f"CPU: {cpu_usage:4.1f}%", True, (130, 255, 160)), (graph_x + 8, graph_y + 6))
+    surface.blit(font_tiny.render(f"RAM: {ram_usage:4.1f}%", True, (210, 150, 255)), (graph_x + 88, graph_y + 6))
+
+    if gpu_usage is not None:
+        used, total = GPU_STATS["memory"]
+        gpu_txt = f"GPU: {gpu_usage:4.1f}% [{int(used)}/{int(total)}MB]"
+        surface.blit(font_tiny.render(gpu_txt, True, (255, 200, 120)), (graph_x + 168, graph_y + 6))
+    else:
+        surface.blit(font_tiny.render("GPU: N/A", True, (140, 160, 180)), (graph_x + 168, graph_y + 6))
+
+
+# -------------------- MULTI-BAND AUDIO SPECTRUM VISUALIZER --------------------
+def draw_audio_spectrum(surface, amplitude):
+    global spectrum_heights
+    spec_rect = LAYOUT["spectrum"]
+    theme = THEMES.get(current_theme, THEMES[1])
+    accent = theme["primary"]
+
+    # Frame
+    spec_surf = pygame.Surface((spec_rect.width, spec_rect.height), pygame.SRCALPHA)
+    spec_surf.fill((8, 14, 30, 190))
+    surface.blit(spec_surf, (spec_rect.x, spec_rect.y))
+    pygame.draw.rect(surface, (28, 48, 88), spec_rect, 1, border_radius=6)
+
+    bar_gap = 4
+    total_gaps = (SPECTRUM_BANDS - 1) * bar_gap
+    bar_w = max(3, (spec_rect.width - 24 - total_gaps) // SPECTRUM_BANDS)
+    max_h = spec_rect.height - 18
+
+    # Smooth animated heights
+    for b in range(SPECTRUM_BANDS):
+        # Bell curve factor around center frequencies + amplitude
+        freq_factor = 1.0 - abs(b - (SPECTRUM_BANDS / 2)) / (SPECTRUM_BANDS / 2)
+        target = min(1.0, amplitude * (0.8 + freq_factor * 1.5) + random.uniform(0.02, 0.08) * (amplitude > 0.05))
+        spectrum_heights[b] += (target - spectrum_heights[b]) * 0.28
+
+    start_x = spec_rect.x + (spec_rect.width - (SPECTRUM_BANDS * bar_w + total_gaps)) // 2
+    base_y = spec_rect.bottom - 8
+
+    for b in range(SPECTRUM_BANDS):
+        h = max(2, int(spectrum_heights[b] * max_h))
+        bx = start_x + b * (bar_w + bar_gap)
+        by = base_y - h
+
+        col = mix_color(theme["primary_soft"], accent, b / SPECTRUM_BANDS)
+        pygame.draw.rect(surface, col, (bx, by, bar_w, h), border_radius=2)
+
+    font_db = pygame.font.SysFont("consolas", 8, bold=True)
+    amp_pct = int(amplitude * 100)
+    db_surf = font_db.render(f"ACOUSTIC INPUT: {amp_pct:02d}%", True, accent)
+    surface.blit(db_surf, (spec_rect.x + 10, spec_rect.y + 4))
+
+
+# -------------------- ADVANCED JARVIS HUD CORE --------------------
+def draw_sidd_hud(surface, t, amplitude):
+    global ULTRA_BOLD, VOICE_PULSES
+
+    center = (CENTER_X, CENTER_Y)
+    ts = t * 0.001
+    base = int(min(WIDTH, HEIGHT) * 0.11)
+    amp = min(max(amplitude, 0.0), 1.0)
+    amp_visual = amp ** 0.7
+
+    CYAN = (0, 220, 255)
+    CYAN_SOFT = (0, 160, 210)
+
+    outer_w = 4 if ULTRA_BOLD else 2
+    inner_w = 3 if ULTRA_BOLD else 1
+    core_w = 5 if ULTRA_BOLD else 2
+
+    r_inner = int(base * 0.85)
+    r_outer = int(base * 1.35)
+    r_glow = int(base * 1.55)
+
+    pygame.draw.circle(surface, CYAN_SOFT, center, r_glow, 1)
+    pygame.draw.circle(surface, CYAN, center, r_outer, outer_w)
+    pygame.draw.circle(surface, CYAN, center, r_inner, inner_w)
+
+    # Rotating cyber gap arcs
+    gap_rect = pygame.Rect(0, 0, r_outer * 2, r_outer * 2)
+    gap_rect.center = center
+    for i in range(3):
+        offset = ts * 0.6 + i * (2 * math.pi / 3)
+        pygame.draw.arc(surface, CYAN_SOFT, gap_rect, offset, offset + math.pi / 7, outer_w)
+
+    # Dynamic Theme Colors
+    theme = THEMES.get(current_theme, THEMES[1])
+    inner_color = mix_color(theme["quiet_core"], theme["loud_core"], amp_visual)
+
+    # Pulsing core
+    core_radius = int(base * (0.42 + 0.28 * amp_visual))
+    pygame.draw.circle(surface, inner_color, center, core_radius, core_w)
+
+    # Rotating processor polygon
+    sides = 6
+    poly_radius = int(core_radius * 0.75)
+    poly_ang = ts * 1.2
+    pts = [
+        (CENTER_X + poly_radius * math.cos(poly_ang + 2 * math.pi * i / sides),
+         CENTER_Y + poly_radius * math.sin(poly_ang + 2 * math.pi * i / sides))
+        for i in range(sides)
+    ]
+    pygame.draw.polygon(surface, inner_color, pts, 2)
+
+    # Inner Ticks
+    tick_count = 20
+    tick_rot = ts * 0.5
+    for i in range(tick_count):
+        ang = tick_rot + (2 * math.pi * i / tick_count)
+        x0 = CENTER_X + (r_inner * 0.94) * math.cos(ang)
+        y0 = CENTER_Y + (r_inner * 0.94) * math.sin(ang)
+        x1 = CENTER_X + (r_inner * 1.02) * math.cos(ang)
+        y1 = CENTER_Y + (r_inner * 1.02) * math.sin(ang)
+        pygame.draw.line(surface, CYAN_SOFT, (x0, y0), (x1, y1), 1)
+
+    # Reactive radial scanning lines
+    num_lines = 16
+    l_rot = ts * 1.6
+    for i in range(num_lines):
+        ang = l_rot + (2 * math.pi * i / num_lines)
+        r0 = core_radius * 1.05
+        r1 = r_inner * (0.90 + 0.18 * amp_visual)
+        x0 = CENTER_X + r0 * math.cos(ang)
+        y0 = CENTER_Y + r0 * math.sin(ang)
+        x1 = CENTER_X + r1 * math.cos(ang)
+        y1 = CENTER_Y + r1 * math.sin(ang)
+        pygame.draw.line(surface, inner_color, (x0, y0), (x1, y1), 1)
+
+    # Sweeping radar laser
+    sweep_r = r_outer * 1.02
+    sw_rect = pygame.Rect(0, 0, sweep_r * 2, sweep_r * 2)
+    sw_rect.center = center
+    sw_ang = ts * 1.4
+    pygame.draw.arc(surface, (255, 255, 255), sw_rect, sw_ang, sw_ang + math.pi / 18, 3)
+
+    # Orbiting satellite energy orb
+    orb_ang = ts * 2.2
+    ox = CENTER_X + (r_inner * 1.1) * math.cos(orb_ang)
+    oy = CENTER_Y + (r_inner * 1.1) * math.sin(orb_ang)
+    pygame.draw.circle(surface, mix_color(inner_color, (255, 255, 255), 0.6), (int(ox), int(oy)), 5)
+
+    # Speaking expanding rings
+    alive = []
+    for start_t in VOICE_PULSES:
+        age = t - start_t
+        if 0 <= age <= VOICE_PULSE_LIFE:
+            alive.append(start_t)
+            p = age / VOICE_PULSE_LIFE
+            pr = core_radius * 1.1 + p * (r_outer * 0.95 - core_radius * 1.1)
+            pc = mix_color(inner_color, CYAN_SOFT, p)
+            pygame.draw.circle(surface, pc, center, int(pr), 2)
+    VOICE_PULSES = alive
+
+
+# -------------------- BOTTOM STATUS BAR --------------------
+def draw_status_bar(surface, fps):
+    bar_rect = LAYOUT["status_bar"]
+    theme = THEMES.get(current_theme, THEMES[1])
+    accent = theme["primary"]
+
+    pygame.draw.rect(surface, (7, 11, 24), bar_rect)
+    pygame.draw.line(surface, (25, 45, 80), (0, bar_rect.y), (WIDTH, bar_rect.y), 1)
+
+    font = pygame.font.SysFont("consolas", 10)
+
+    # Left: Action Status
     global ACTION_STATUS, ACTION_STATUS_UNTIL
-    try:
-        if action == "play":
-            webbrowser.open("https://www.youtube.com")
-            ACTION_STATUS = "MUSIC CHANNEL OPENED"
-        elif action == "web":
-            webbrowser.open("https://www.google.com")
-            ACTION_STATUS = "WEB SEARCH OPENED"
-        elif action == "files":
-            os.startfile(os.path.expanduser("~"))
-            ACTION_STATUS = "FILES HOME OPENED"
-        elif action == "system":
-            subprocess.Popen(["taskmgr.exe"])
-            ACTION_STATUS = "SYSTEM MONITOR OPENED"
-        ACTION_STATUS_UNTIL = pygame.time.get_ticks() + 2200
-    except OSError:
-        ACTION_STATUS = "ACTION UNAVAILABLE"
-        ACTION_STATUS_UNTIL = pygame.time.get_ticks() + 2200
+    status = ACTION_STATUS if pygame.time.get_ticks() < ACTION_STATUS_UNTIL else "SYSTEM OPERATIONAL // READY"
+    stat_surf = font.render(f"[STATUS]: {status}", True, accent)
+    surface.blit(stat_surf, (14, bar_rect.y + 8))
+
+    # Center: Interactive Controls Hint
+    hints = font.render("SHORTCUTS: [1-4] Themes | [U] Bold HUD | [ENTER] Send Command", True, (110, 140, 180))
+    surface.blit(hints, hints.get_rect(center=(WIDTH // 2, bar_rect.centery)))
+
+    # Right: FPS & System
+    fps_surf = font.render(f"FPS: {int(fps):02d}  |  RES: {WIDTH}x{HEIGHT}", True, (140, 170, 205))
+    surface.blit(fps_surf, (WIDTH - fps_surf.get_width() - 14, bar_rect.y + 8))
 
 
-# -------------------- MAIN LOOP --------------------
+# -------------------- MAIN APPLICATION LOOP --------------------
 def main():
     pygame.init()
+    pygame.key.set_repeat(400, 35)
 
-    global SPHERE_RADIUS, current_theme, ULTRA_BOLD, last_amplitude, VOICE_PULSES, CHAT_SCROLL_OFFSET
+    global SPHERE_RADIUS, current_theme, ULTRA_BOLD, last_amplitude, VOICE_PULSES
+    global USER_INPUT_TEXT, INPUT_ACTIVE, CHAT_SCROLL_OFFSET, CAMERA_SURFACE, CAMERA_ENABLED, MIC_MUTED
 
-    # ---- START SIDD AI BACKEND (AI.py) ----
+    # Start Neura Assistant Backend Process
     ai_process = None
     try:
-        # AI.py is assumed to be in the same folder as frontend.py
         script_dir = os.path.dirname(os.path.abspath(__file__))
         ai_script = os.path.join(script_dir, "neura.py")
-
         ai_process = subprocess.Popen([sys.executable, ai_script])
-        print("AI backend started:", ai_script)
+        print("Neura AI backend daemon started:", ai_script)
     except Exception as e:
-        print("Could not start AI backend:", e)
+        print("Note: Could not spawn AI backend automatically:", e)
 
-    # get current display resolution and start in a resizable window
+    # Display window initialization
     info = pygame.display.Info()
-    start_w, start_h = info.current_w // 1, info.current_h // 1
+    start_w = min(1440, max(1100, int(info.current_w * 0.85)))
+    start_h = min(900, max(720, int(info.current_h * 0.85)))
 
     recalc_layout(start_w, start_h)
     screen = pygame.display.set_mode((start_w, start_h), pygame.RESIZABLE)
-    pygame.display.set_caption("Audio Reactive Golden Sphere + Jarvis HUD + Analytics")
+    pygame.display.set_caption("NEURA AI // QUANTUM DESKTOP INTERFACE")
 
     clock = pygame.time.Clock()
-
     dots = [Dot() for _ in range(NUM_DOTS)]
 
-    # ---- Audio setup ----
-    pa = pyaudio.PyAudio()
-    stream = pa.open(
-        format=FORMAT,
-        channels=CHANNELS,
-        rate=RATE,
-        input=True,
-        frames_per_buffer=CHUNK
-    )
+    # Audio Setup with PyAudio
+    pa = None
+    stream = None
+    try:
+        pa = pyaudio.PyAudio()
+        stream = pa.open(
+            format=FORMAT,
+            channels=CHANNELS,
+            rate=RATE,
+            input=True,
+            frames_per_buffer=CHUNK,
+        )
+    except Exception as e:
+        print("Audio device warning:", e)
 
-    # ---- CAMERA SETUP ----
-    cam = cv2.VideoCapture(0)
-    cam.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
-    cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
-
+    # Camera Setup with OpenCV
+    cam = None
+    try:
+        cam = cv2.VideoCapture(0)
+        cam.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+        cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+    except Exception as e:
+        print("Camera device warning:", e)
 
     rot_x = 0.0
     rot_y = 0.0
-    t = 0.0  # time for animation (ms)
-
+    t = 0.0
     running = True
+
     try:
         while running:
             dt = clock.tick(60)
-            t += dt  # time in ms
+            t += dt
 
+            # Monitor backend health
             if ai_process is not None and ai_process.poll() is not None:
                 print("Backend stopped. Closing frontend...")
                 running = False
                 break
-            
-            # ---- READ CAMERA FRAME ----
-            ret, frame = cam.read()
-            if ret:
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frame = cv2.flip(frame, 1)
-                cam_surface = pygame.surfarray.make_surface(frame.swapaxes(0, 1))
+
+            # Update live assistant status from bridge
+            update_assistant_status()
+
+            # Process Webcam
+            if CAMERA_ENABLED and cam is not None and cam.isOpened():
+                ret, frame = cam.read()
+                if ret:
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    frame = cv2.flip(frame, 1)
+                    CAMERA_SURFACE = pygame.surfarray.make_surface(frame.swapaxes(0, 1))
+                else:
+                    CAMERA_SURFACE = None
             else:
-                cam_surface = None
+                CAMERA_SURFACE = None
 
+            # Handle Pygame Events
             for event in pygame.event.get():
-                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    for action_rect, (_, action, _) in zip(get_quick_action_rects(), QUICK_ACTIONS):
-                        if action_rect.collidepoint(event.pos):
-                            activate_quick_action(action)
-                            break
-
-                if event.type == pygame.MOUSEWHEEL:
-                    mx, my = pygame.mouse.get_pos()
-
-                    panel_x = 20
-                    panel_y = 20 + 110 + 12
-                    panel_w = 300
-                    panel_h = int(HEIGHT * 0.5)
-
-                    if panel_x <= mx <= panel_x + panel_w and panel_y <= my <= panel_y + panel_h:
-                        CHAT_SCROLL_OFFSET -= event.y * 3
-                        CHAT_SCROLL_OFFSET = max(0, CHAT_SCROLL_OFFSET)
-
                 if event.type == pygame.QUIT:
                     running = False
 
-                # handle window resize
-                if event.type == pygame.VIDEORESIZE:
-                    new_w, new_h = event.w, event.h
-                    recalc_layout(new_w, new_h)
-                    screen = pygame.display.set_mode((new_w, new_h), pygame.RESIZABLE)
+                elif event.type == pygame.VIDEORESIZE:
+                    recalc_layout(event.w, event.h)
+                    screen = pygame.display.set_mode((event.w, event.h), pygame.RESIZABLE)
 
-                # -------- THEME SWITCH KEYS (1–4) + ULTRA BOLD (U) --------
-                if event.type == pygame.KEYDOWN:
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    mpos = event.pos
+
+                    # 1. Header controls & themes
+                    theme_rects, ctrl_rects = get_header_button_rects()
+                    for tid, trect in theme_rects:
+                        if trect.collidepoint(mpos):
+                            current_theme = tid
+
+                    if ctrl_rects["MIC"].collidepoint(mpos):
+                        MIC_MUTED = not MIC_MUTED
+                    elif ctrl_rects["CAM"].collidepoint(mpos):
+                        CAMERA_ENABLED = not CAMERA_ENABLED
+                    elif ctrl_rects["BOLD"].collidepoint(mpos):
+                        ULTRA_BOLD = not ULTRA_BOLD
+                    elif ctrl_rects["CLR"].collidepoint(mpos):
+                        clear_chat_history()
+
+                    # 2. Quick Action Chips
+                    for qrect, (_, akey, ptext, _) in zip(get_quick_action_rects(), QUICK_ACTIONS):
+                        if qrect.collidepoint(mpos):
+                            activate_quick_action(akey, ptext)
+                            break
+
+                    # 3. Input Box Focus & Send Button
+                    send_btn = get_send_button_rect()
+                    if send_btn.collidepoint(mpos):
+                        if USER_INPUT_TEXT.strip():
+                            send_command_to_backend(USER_INPUT_TEXT)
+                            USER_INPUT_TEXT = ""
+                    elif LAYOUT["input_box"].collidepoint(mpos):
+                        INPUT_ACTIVE = True
+                    else:
+                        if not LAYOUT["chat_panel"].collidepoint(mpos):
+                            INPUT_ACTIVE = True
+
+                elif event.type == pygame.MOUSEWHEEL:
+                    mx, my = pygame.mouse.get_pos()
+                    if LAYOUT["chat_panel"].collidepoint(mx, my):
+                        CHAT_SCROLL_OFFSET -= event.y * 24
+                        CHAT_SCROLL_OFFSET = max(0, CHAT_SCROLL_OFFSET)
+
+                elif event.type == pygame.KEYDOWN:
+                    if INPUT_ACTIVE:
+                        if event.key == pygame.K_RETURN:
+                            if USER_INPUT_TEXT.strip():
+                                send_command_to_backend(USER_INPUT_TEXT)
+                                USER_INPUT_TEXT = ""
+                        elif event.key == pygame.K_BACKSPACE:
+                            USER_INPUT_TEXT = USER_INPUT_TEXT[:-1]
+                        elif event.key == pygame.K_ESCAPE:
+                            USER_INPUT_TEXT = ""
+                        elif event.key == pygame.K_v and (pygame.key.get_mods() & pygame.KMOD_CTRL):
+                            try:
+                                import tkinter as tk
+                                root = tk.Tk()
+                                root.withdraw()
+                                clip = root.clipboard_get()
+                                root.destroy()
+                                if clip:
+                                    USER_INPUT_TEXT += clip.strip()
+                            except Exception:
+                                pass
+                        else:
+                            if event.unicode and len(event.unicode) == 1 and event.unicode.isprintable():
+                                USER_INPUT_TEXT += event.unicode
+
+                    # Global Theme hotkeys
                     if event.key == pygame.K_1:
                         current_theme = 1
                     elif event.key == pygame.K_2:
@@ -933,98 +1396,101 @@ def main():
                         current_theme = 3
                     elif event.key == pygame.K_4:
                         current_theme = 4
-                    elif event.key == pygame.K_u:
+                    elif event.key == pygame.K_u and not INPUT_ACTIVE:
                         ULTRA_BOLD = not ULTRA_BOLD
 
-            # ---- Read audio chunk & compute amplitude ----
-            data = stream.read(CHUNK, exception_on_overflow=False)
-            samples = struct.unpack(str(CHUNK) + 'h', data)
+            # Audio Processing
+            amplitude = 0.0
+            if stream is not None and not MIC_MUTED:
+                try:
+                    data = stream.read(CHUNK, exception_on_overflow=False)
+                    samples = struct.unpack(str(CHUNK) + 'h', data)
+                    sum_sq = sum(s * s for s in samples)
+                    rms = math.sqrt(sum_sq / CHUNK)
+                    amplitude = min(rms / 3000.0, 1.0)
+                except Exception:
+                    amplitude = 0.0
 
-            # RMS (root mean square) for volume
-            sum_squares = 0.0
-            for s in samples:
-                sum_squares += s * s
-            rms = math.sqrt(sum_squares / CHUNK)
-
-            # Normalize RMS to [0,1] (tune 3000 for sensitivity)
-            amplitude = min(rms / 3000.0, 1.0)
-
-            # ----- SPEAKING PULSE TRIGGER (on rising edge over threshold) -----
             if amplitude > VOICE_THRESHOLD and last_amplitude <= VOICE_THRESHOLD:
                 VOICE_PULSES.append(t)
             last_amplitude = amplitude
 
-            # sphere radius fixed
-            SPHERE_RADIUS = SPHERE_RADIUS_BASE
-
-            # global sphere rotation
+            # Rotate 3D Sphere
             rot_y += ROT_Y_SPEED * dt * 0.001
             rot_x += ROT_X_SPEED * dt * 0.001
 
-            # update dot positions
             for d in dots:
                 d.update(dt, rot_x, rot_y)
 
-            # draw farthest first
             dots_sorted = sorted(dots, key=lambda d: d.z)
 
-            # ---- DRAW ----
+            # Synchronize Chat Messages from Bridge
             fetch_chat_from_backend()
-            screen.fill(BG_COLOR)
 
-            # ---- DRAW CAMERA WINDOW ----
-            if cam_surface:
-                cam_w = 320
-                cam_h = 240
-                cam_x = WIDTH - cam_w - 30
-                cam_y = 30
+            # Render UI
+            screen.fill(COLOR_BG)
 
-                # Background frame box
-                pygame.draw.rect(screen, (15, 20, 40), (cam_x - 5, cam_y - 5, cam_w + 10, cam_h + 10), border_radius=8)
-
-                # Border
-                pygame.draw.rect(screen, (0, 180, 255), (cam_x - 5, cam_y - 5, cam_w + 10, cam_h + 10), 2, border_radius=8)
-
-                # Camera feed
-                screen.blit(pygame.transform.scale(cam_surface, (cam_w, cam_h)), (cam_x, cam_y))
-
-
-            # sphere outline
+            # Central Atmospheric Radial Glow
+            theme = THEMES.get(current_theme, THEMES[1])
+            glow_surf = pygame.Surface((SPHERE_RADIUS_BASE * 3, SPHERE_RADIUS_BASE * 3), pygame.SRCALPHA)
             pygame.draw.circle(
-                screen,
-                SPHERE_OUTLINE_COLOR,
-                (CENTER_X, CENTER_Y),
-                int(SPHERE_RADIUS * 0.9),
-                1
+                glow_surf,
+                (*theme["primary_soft"], 18),
+                (SPHERE_RADIUS_BASE * 3 // 2, SPHERE_RADIUS_BASE * 3 // 2),
+                SPHERE_RADIUS_BASE * 1.3
             )
+            screen.blit(glow_surf, (CENTER_X - SPHERE_RADIUS_BASE * 3 // 2, CENTER_Y - SPHERE_RADIUS_BASE * 3 // 2))
 
-            # sphere dots
+            # Sphere outline & dots
+            pygame.draw.circle(screen, (15, 25, 48), (CENTER_X, CENTER_Y), int(SPHERE_RADIUS * 0.92), 1)
             for d in dots_sorted:
-                sx, sy, radius, color, depth = d.project()
+                sx, sy, radius, color = d.project()
                 if 0 <= sx < WIDTH and 0 <= sy < HEIGHT:
-                    draw_dot(screen, sx, sy, radius, color)
+                    pygame.draw.circle(screen, color, (sx, sy), radius)
 
-            # Jarvis HUD always on top, inside sphere
+            # Jarvis HUD Core (Center)
             draw_sidd_hud(screen, t, amplitude)
 
-            # Working analytics around the sphere
-            fps = clock.get_fps()
-            # Draw chat first, then analytics so analytics appear above
-            draw_analytics(screen, t, amplitude, fps)
+            # Multi-Band Audio Spectrum
+            draw_audio_spectrum(screen, amplitude)
+
+            # Left Column (Chat, Chips, Input)
             draw_chat_panel(screen)
             draw_quick_actions(screen)
+            draw_input_box(screen)
+
+            # Right Column (Vision, Memory, Performance)
+            draw_camera_panel(screen, t)
             draw_memory_panel(screen)
+            draw_performance_panel(screen)
+
+            # Top Header & Bottom Status Bar
+            draw_header_bar(screen)
+            fps = clock.get_fps()
+            draw_status_bar(screen, fps)
 
             pygame.display.flip()
-    finally:
-        # clean up audio
-        stream.stop_stream()
-        stream.close()
-        pa.terminate()
-        pygame.quit()
-        cam.release()
 
-        # ---- STOP SIDD AI BACKEND ----
+    finally:
+        if stream is not None:
+            try:
+                stream.stop_stream()
+                stream.close()
+            except Exception:
+                pass
+        if pa is not None:
+            try:
+                pa.terminate()
+            except Exception:
+                pass
+        if cam is not None:
+            try:
+                cam.release()
+            except Exception:
+                pass
+
+        pygame.quit()
+
         if ai_process is not None and ai_process.poll() is None:
             try:
                 ai_process.terminate()

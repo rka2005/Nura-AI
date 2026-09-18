@@ -6,3 +6,5 @@ __pycache__/
 *__pycache__/
 conversation_memory.json
 user_memory.json
+input_bridge.json
+status_bridge.json
