@@ -25,7 +25,8 @@ class DesktopController:
     """
     def __init__(self, screenshots_dir: str = None):
         if not screenshots_dir:
-            self.screenshots_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "screenshots")
+            pictures_dir = os.path.join(os.path.expanduser("~"), "Pictures")
+            self.screenshots_dir = os.path.join(pictures_dir, "Screenshots")
         else:
             self.screenshots_dir = screenshots_dir
         os.makedirs(self.screenshots_dir, exist_ok=True)

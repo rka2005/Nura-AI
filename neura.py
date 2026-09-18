@@ -69,8 +69,12 @@ def send_to_frontend(role, message):
 
         data.append(payload)
 
-        with open(CHAT_BRIDGE_FILE, "w", encoding="utf-8") as f:
+        temp_bridge_file = f"{CHAT_BRIDGE_FILE}.tmp"
+        with open(temp_bridge_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_bridge_file, CHAT_BRIDGE_FILE)
 
     except Exception as e:
         print("Chat bridge error:", e)
@@ -242,7 +246,7 @@ def execute_desktop_or_file_intent(intent, metadata, raw_query: str = ""):
     elif intent == IntentType.DESKTOP_SCREENSHOT:
         success, path_or_err = desktop_ctrl.take_screenshot()
         if success:
-            return True, f"Screenshot captured and saved, Sir."
+            return True, f"Screenshot captured and saved at {path_or_err}, Sir."
         return True, f"Could not capture screenshot: {path_or_err}"
 
     elif intent == IntentType.FILE_CREATE:

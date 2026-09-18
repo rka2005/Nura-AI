@@ -7,6 +7,7 @@ import cv2
 import os
 import sys
 import subprocess
+import webbrowser
 import psutil
 from collections import deque
 import json
@@ -15,7 +16,7 @@ import json
 CHAT_MESSAGES = deque(maxlen=25)
 CHAT_SCROLL_OFFSET = 0
 CHAT_BRIDGE_FILE = "chat_bridge.json"
-LAST_CHAT_LEN = 0
+LAST_CHAT_SIGNATURE = None
 
 WIDTH, HEIGHT = 500, 500
 CENTER_X, CENTER_Y = WIDTH // 2, HEIGHT // 2
@@ -43,6 +44,17 @@ CPU_GRAPH = []
 RAM_GRAPH = []
 GPU_GRAPH = []
 GRAPH_MAX_POINTS = 120
+GPU_STATS = {"usage": None, "memory": None, "updated_at": 0.0}
+MEMORY_CACHE = {"data": {}, "updated_at": 0.0}
+ACTION_STATUS = "READY FOR COMMAND"
+ACTION_STATUS_UNTIL = 0
+
+QUICK_ACTIONS = [
+    ("MUSIC", "play", (255, 180, 80)),
+    ("WEB", "web", (80, 190, 255)),
+    ("FILES", "files", (150, 220, 130)),
+    ("SYSTEM", "system", (210, 130, 255)),
+]
 
 # --------- THEMES (for HUD inner colors) ---------
 # Outer HUD stays cyan; only inner HUD colors change
@@ -408,7 +420,7 @@ def draw_sidd_hud(surface, t, amplitude):
 
 # -------------------- ANALYTICS PANELS OUTSIDE SPHERE --------------------
 def draw_analytics(surface, t, amplitude, fps):
-    global current_theme, ULTRA_BOLD
+    global current_theme, ULTRA_BOLD, GPU_STATS
 
     # --- Colors ---
     panel_bg = (10, 15, 35)
@@ -483,18 +495,43 @@ def draw_analytics(surface, t, amplitude, fps):
     ram_info = psutil.virtual_memory()
     ram_usage = ram_info.percent
 
-    # GPU temperature if available
-    try:
-        gpu_temp = psutil.sensors_temperatures().get("gpu", None)
-        gpu_temp = gpu_temp[0].current if gpu_temp else None
-    except:
-        gpu_temp = None
+    # Windows commonly has no psutil GPU sensor, so use nvidia-smi when available.
+    now = pygame.time.get_ticks() / 1000.0
+    if now - GPU_STATS["updated_at"] >= 0.5:
+        GPU_STATS["updated_at"] = now
+        try:
+            result = subprocess.run(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=utilization.gpu,memory.used,memory.total",
+                    "--format=csv,noheader,nounits",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=0.25,
+                check=False,
+            )
+            values = result.stdout.strip().split(",")
+            if result.returncode == 0 and len(values) >= 3:
+                GPU_STATS["usage"] = float(values[0].strip())
+                GPU_STATS["memory"] = (
+                    float(values[1].strip()),
+                    float(values[2].strip()),
+                )
+            else:
+                GPU_STATS["usage"] = None
+                GPU_STATS["memory"] = None
+        except (OSError, ValueError, subprocess.SubprocessError):
+            GPU_STATS["usage"] = None
+            GPU_STATS["memory"] = None
+
+    gpu_usage = GPU_STATS["usage"]
 
     # -------- Update Graph Buffers --------
     CPU_GRAPH.append(cpu_usage)
     RAM_GRAPH.append(ram_usage)
-    if gpu_temp:
-        GPU_GRAPH.append(gpu_temp)
+    if gpu_usage is not None:
+        GPU_GRAPH.append(gpu_usage)
     else:
         GPU_GRAPH.append(0)
 
@@ -553,13 +590,18 @@ def draw_analytics(surface, t, amplitude, fps):
     draw_line_graph(RAM_GRAPH, (160, 80, 255), section_h + 10, section_h - 15)
 
     # -------- GPU Graph (Orange) - Bottom Section --------
-    if gpu_temp:
+    if gpu_usage is not None:
         draw_line_graph(GPU_GRAPH, (255, 180, 80), section_h * 2 + 10, section_h - 15)
 
     # -------- Text Labels --------
     label_cpu = font_tiny.render(f"CPU: {cpu_usage:.1f} %", True, (200, 255, 200))
     label_ram = font_tiny.render(f"Memory: {ram_usage:.1f} %", True, (230, 200, 255))
-    label_gpu = font_tiny.render(f"GPU Temp: {gpu_temp:.1f}°C" if gpu_temp else "GPU: N/A", True, (255, 220, 170))
+    if gpu_usage is not None:
+        used, total = GPU_STATS["memory"]
+        label_gpu_text = f"GPU: {gpu_usage:.1f}%  VRAM: {used:.0f}/{total:.0f} MB"
+    else:
+        label_gpu_text = "GPU: unavailable"
+    label_gpu = font_tiny.render(label_gpu_text, True, (255, 220, 170))
 
     surface.blit(label_cpu, (panel_x + 10, panel_y + 10))
     surface.blit(label_ram, (panel_x + 10, panel_y + 90))
@@ -567,7 +609,7 @@ def draw_analytics(surface, t, amplitude, fps):
 
 
 def fetch_chat_from_backend():
-    global LAST_CHAT_LEN, CHAT_SCROLL_OFFSET
+    global LAST_CHAT_SIGNATURE, CHAT_SCROLL_OFFSET
 
     if not os.path.exists(CHAT_BRIDGE_FILE):
         return
@@ -576,16 +618,30 @@ def fetch_chat_from_backend():
         with open(CHAT_BRIDGE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        if len(data) > LAST_CHAT_LEN:
-            new_msgs = data[LAST_CHAT_LEN:]
-            for msg in new_msgs:
-                prefix = "You" if msg["role"] == "user" else "Neura"
-                CHAT_MESSAGES.append(f"{prefix}: {msg['message']}")
-                CHAT_SCROLL_OFFSET = 0
-            LAST_CHAT_LEN = len(data)
+        signature = [(msg.get("time"), msg.get("role"), msg.get("message")) for msg in data]
+        if signature != LAST_CHAT_SIGNATURE:
+            old_signature = LAST_CHAT_SIGNATURE or []
+            common_prefix = 0
+            while common_prefix < len(old_signature) and common_prefix < len(signature):
+                if old_signature[common_prefix] != signature[common_prefix]:
+                    break
+                common_prefix += 1
 
-    except Exception as e:
-        print("Frontend chat read error:", e)
+            # Rebuild when the bridge was cleared, rotated, or edited.
+            new_msgs = data[common_prefix:]
+            if common_prefix == 0:
+                CHAT_MESSAGES.clear()
+
+            for msg in new_msgs:
+                prefix = "You" if msg.get("role") == "user" else "Neura"
+                CHAT_MESSAGES.append(f"{prefix}: {msg.get('message', '')}")
+                CHAT_SCROLL_OFFSET = 0
+            LAST_CHAT_SIGNATURE = signature
+
+    except (OSError, json.JSONDecodeError, TypeError) as e:
+        # The backend may be between truncate and write; retry on the next frame.
+        if not isinstance(e, json.JSONDecodeError):
+            print("Frontend chat read error:", e)
 
 # -------------------- Conversation Pannel --------------------
 def draw_chat_panel(surface):
@@ -634,6 +690,139 @@ def draw_chat_panel(surface):
         y += line_h
 
     surface.set_clip(prev_clip)
+
+
+def panel_frame(surface, rect, accent=(0, 180, 255), title=""):
+    """Draw the shared glass-like panel treatment used by the side modules."""
+    pygame.draw.rect(surface, (9, 14, 32), rect, border_radius=10)
+    pygame.draw.rect(surface, (35, 62, 112), rect, 1, border_radius=10)
+    pygame.draw.line(surface, accent, (rect.x + 12, rect.y + 1), (rect.x + 72, rect.y + 1), 2)
+    if title:
+        title_font = pygame.font.SysFont("consolas", 13, bold=True)
+        surface.blit(title_font.render(title, True, (190, 220, 250)), (rect.x + 12, rect.y + 9))
+
+
+def get_quick_action_rects():
+    panel_x = 20
+    panel_y = 20 + 110 + 12 + int(HEIGHT * 0.5) + 12
+    panel_w = 300
+    panel_h = 92
+    button_gap = 7
+    button_w = (panel_w - 24 - button_gap * 3) // 4
+    return [
+        pygame.Rect(panel_x + 12 + i * (button_w + button_gap), panel_y + 32, button_w, 47)
+        for i in range(len(QUICK_ACTIONS))
+    ]
+
+
+def draw_quick_actions(surface):
+    panel_x = 20
+    panel_y = 20 + 110 + 12 + int(HEIGHT * 0.5) + 12
+    panel_rect = pygame.Rect(panel_x, panel_y, 300, 92)
+    panel_frame(surface, panel_rect, (255, 180, 80), "QUICK ACTIONS")
+
+    mouse_pos = pygame.mouse.get_pos()
+    label_font = pygame.font.SysFont("consolas", 11, bold=True)
+    hint_font = pygame.font.SysFont("consolas", 10)
+    for rect, (label, _, accent) in zip(get_quick_action_rects(), QUICK_ACTIONS):
+        hovered = rect.collidepoint(mouse_pos)
+        fill = (25, 38, 65) if hovered else (15, 24, 48)
+        pygame.draw.rect(surface, fill, rect, border_radius=7)
+        pygame.draw.rect(surface, accent, rect, 2 if hovered else 1, border_radius=7)
+        pygame.draw.circle(surface, accent, (rect.centerx, rect.y + 14), 4)
+        text = label_font.render(label, True, (225, 235, 255))
+        surface.blit(text, text.get_rect(center=(rect.centerx, rect.y + 31)))
+
+    global ACTION_STATUS, ACTION_STATUS_UNTIL
+    status = ACTION_STATUS if pygame.time.get_ticks() < ACTION_STATUS_UNTIL else "READY FOR COMMAND"
+    status_surf = hint_font.render(status, True, (125, 160, 205))
+    surface.blit(status_surf, (panel_x + 12, panel_y + 75))
+
+
+def load_memory_snapshot():
+    """Load the persisted memory files at a low frequency for the HUD."""
+    now = pygame.time.get_ticks() / 1000.0
+    if now - MEMORY_CACHE["updated_at"] < 1.0:
+        return MEMORY_CACHE["data"]
+
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    snapshot = {}
+    try:
+        with open(os.path.join(base_dir, "memory", "user_memory.json"), "r", encoding="utf-8") as file:
+            snapshot["user"] = json.load(file)
+        with open(os.path.join(base_dir, "memory", "conversation_memory.json"), "r", encoding="utf-8") as file:
+            snapshot["conversation"] = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        snapshot = MEMORY_CACHE["data"]
+
+    MEMORY_CACHE["data"] = snapshot
+    MEMORY_CACHE["updated_at"] = now
+    return snapshot
+
+
+def draw_memory_panel(surface):
+    panel_w = 300
+    panel_x = WIDTH - panel_w - 20
+    panel_y = 292
+    panel_h = 184
+    panel_rect = pygame.Rect(panel_x, panel_y, panel_w, panel_h)
+    panel_frame(surface, panel_rect, (150, 220, 130), "MEMORY CORE")
+
+    snapshot = load_memory_snapshot()
+    user_memory = snapshot.get("user", {})
+    conversation = snapshot.get("conversation", {})
+    preferences = user_memory.get("preferences", {})
+    facts = user_memory.get("user_facts", {})
+    activity = user_memory.get("activity_log", [])
+    recent = conversation.get("recent_messages", [])
+
+    font = pygame.font.SysFont("consolas", 12)
+    tiny = pygame.font.SysFont("consolas", 10)
+    name = facts.get("name") or "Unknown user"
+    preference_count = len([value for value in preferences.values() if value])
+    fact_count = len([value for value in facts.values() if value])
+    memory_score = min(100, preference_count * 12 + fact_count * 14 + min(len(activity), 10) * 2)
+
+    surface.blit(font.render(f"PROFILE  {name}", True, (215, 240, 215)), (panel_x + 12, panel_y + 35))
+    surface.blit(tiny.render(f"{len(activity)} activities   {len(recent)} recent turns", True, (145, 180, 165)), (panel_x + 12, panel_y + 54))
+
+    bar_rect = pygame.Rect(panel_x + 12, panel_y + 74, panel_w - 24, 8)
+    pygame.draw.rect(surface, (24, 42, 55), bar_rect, border_radius=4)
+    fill_rect = bar_rect.copy()
+    fill_rect.width = int(bar_rect.width * memory_score / 100)
+    if fill_rect.width:
+        pygame.draw.rect(surface, (120, 220, 145), fill_rect, border_radius=4)
+    surface.blit(tiny.render(f"MEMORY INDEX  {memory_score:02d}%", True, (150, 220, 170)), (panel_x + 12, panel_y + 88))
+
+    latest = recent[-1] if recent else {}
+    latest_text = latest.get("content", "No recent memory captured.").replace("\n", " ")
+    latest_text = latest_text[:37] + ("..." if len(latest_text) > 37 else "")
+    surface.blit(tiny.render("LATEST TRACE", True, (115, 160, 205)), (panel_x + 12, panel_y + 111))
+    surface.blit(font.render(latest_text, True, (205, 220, 240)), (panel_x + 12, panel_y + 128))
+    summary = conversation.get("summary", "")
+    summary_text = summary[:42] + ("..." if len(summary) > 42 else "")
+    surface.blit(tiny.render(summary_text or "Conversation memory is ready.", True, (135, 165, 195)), (panel_x + 12, panel_y + 149))
+
+
+def activate_quick_action(action):
+    global ACTION_STATUS, ACTION_STATUS_UNTIL
+    try:
+        if action == "play":
+            webbrowser.open("https://www.youtube.com")
+            ACTION_STATUS = "MUSIC CHANNEL OPENED"
+        elif action == "web":
+            webbrowser.open("https://www.google.com")
+            ACTION_STATUS = "WEB SEARCH OPENED"
+        elif action == "files":
+            os.startfile(os.path.expanduser("~"))
+            ACTION_STATUS = "FILES HOME OPENED"
+        elif action == "system":
+            subprocess.Popen(["taskmgr.exe"])
+            ACTION_STATUS = "SYSTEM MONITOR OPENED"
+        ACTION_STATUS_UNTIL = pygame.time.get_ticks() + 2200
+    except OSError:
+        ACTION_STATUS = "ACTION UNAVAILABLE"
+        ACTION_STATUS_UNTIL = pygame.time.get_ticks() + 2200
 
 
 # -------------------- MAIN LOOP --------------------
@@ -707,6 +896,12 @@ def main():
                 cam_surface = None
 
             for event in pygame.event.get():
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    for action_rect, (_, action, _) in zip(get_quick_action_rects(), QUICK_ACTIONS):
+                        if action_rect.collidepoint(event.pos):
+                            activate_quick_action(action)
+                            break
+
                 if event.type == pygame.MOUSEWHEEL:
                     mx, my = pygame.mouse.get_pos()
 
@@ -817,6 +1012,8 @@ def main():
             # Draw chat first, then analytics so analytics appear above
             draw_analytics(screen, t, amplitude, fps)
             draw_chat_panel(screen)
+            draw_quick_actions(screen)
+            draw_memory_panel(screen)
 
             pygame.display.flip()
     finally:
