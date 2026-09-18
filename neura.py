@@ -24,6 +24,13 @@ import json
 import pyjokes
 from art import text2art
 
+from memory.memory_manager import MemoryManager
+from brain.conversation import generate_ai_response
+from brain.personality import IDENTITY, get_personality_prompt
+from brain.intent_router import route_intent, IntentType
+from brain.desktop_controller import DesktopController
+from brain.file_manager import FileManager
+
 CHAT_BRIDGE_FILE = "chat_bridge.json"
 load_dotenv()
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
@@ -31,12 +38,20 @@ groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 genai.configure(api_key = os.getenv("GEMINI_API_KEY"))
 model = genai.GenerativeModel('gemini-2.0-flash')
 
-engine = pyttsx3.init('sapi5')
-voices = engine.getProperty('voices')
-engine.setProperty('voice', voices[1].id)
-engine.setProperty('rate', 180)
+# 3-Tier Memory Manager
+memory_mgr = MemoryManager()
+memory = memory_mgr.user_memory  # Reference for backward compatibility
 
-MEMORY_FILE = "neura_memory.json"
+# Desktop Automation & File CRUD Controllers
+SCREEN_ACCESS_ALLOWED = True
+desktop_ctrl = DesktopController()
+file_mgr = FileManager()
+
+# Configure Wikipedia User-Agent to comply with Wikimedia API policy
+try:
+    wikipedia.set_user_agent("NeuraAI/1.0 (DesktopAssistant; Windows; contact: neura@ai.local)")
+except Exception as e:
+    print(f"[Wikipedia User-Agent config note]: {e}")
 
 def send_to_frontend(role, message):
     payload = {
@@ -61,105 +76,62 @@ def send_to_frontend(role, message):
         print("Chat bridge error:", e)
 
 def load_memory():
-    """Load or initialize memory structure."""
-    if os.path.exists(MEMORY_FILE):
-        try:
-            with open(MEMORY_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                # Ensure required keys exist
-                data.setdefault("preferences", {})
-                data.setdefault("interaction_history", [])
-                data.setdefault("activity_log", [])
-                data.setdefault("llm_history", [])
-                return data
-        except json.JSONDecodeError:
-            # If file corrupted, reset
-            pass
-    # default structure
-    return {
-        "preferences": {},
-        "interaction_history": [],
-        "activity_log": [],
-        "llm_history": []
-    }
+    """Load or initialize memory structure via MemoryManager."""
+    memory_mgr.load_all()
+    return memory_mgr.user_memory
 
-def save_memory(mem):
+def save_memory(mem=None):
     """Write memory dict to disk."""
-    try:
-        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(mem, f, indent=4, ensure_ascii=False)
-    except Exception as e:
-        print(f"[Memory save error]: {e}")
-
-memory = load_memory()
+    memory_mgr.save_user_memory()
 
 def llm_history_to_pairs():
-    pairs = []
-    for msg in memory.get("llm_history", []):
-        role = msg.get("role", "user")
-        content = msg.get("content", "")
-        if role == "user":
-            pairs.append(("user", content))
-        else:
-            pairs.append(("bot", content))
-    return pairs
+    return memory_mgr.get_recent_history_pairs()
 
 def append_llm_history(role, content):
-    memory["llm_history"].append({"role": role, "content": content})
-    save_memory(memory)
+    # Appended automatically via append_turn in MemoryManager
+    pass
+
 def remember_interaction(user_input, neura_response):
-    memory["interaction_history"].append({
-        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "user": user_input,
-        "neura": neura_response
-    })
-    save_memory(memory)
+    memory_mgr.append_turn(user_input, neura_response)
+    memory_mgr.log_activity(f"Interaction: {user_input[:40]}")
 
 def update_preference(key, value):
-    # If value is list-like or multiple preferences, store as list
-    prev = memory["preferences"].get(key)
-    if prev:
-        # Avoid duplicates for simple strings
-        if isinstance(prev, list):
-            if value not in prev:
-                prev.append(value)
-                memory["preferences"][key] = prev
-        else:
-            if prev != value:
-                memory["preferences"][key] = value
-    else:
-        # If key likely to be multiple (like song_preferences), prefer list
-        if key.endswith("_preferences") or key.endswith("songs"):
-            memory["preferences"][key] = [value]
-        else:
-            memory["preferences"][key] = value
-    save_memory(memory)
+    memory_mgr.set_preference(key, value)
 
 def log_activity(action):
-    memory["activity_log"].append({
-        "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "action": action
-    })
-    save_memory(memory)
+    memory_mgr.log_activity(action)
 
 def recall_preference(key, default=None):
-    return memory["preferences"].get(key, default)
+    return memory_mgr.get_preference(key, default)
 
 def analyze_memory_on_start():
-    """Run light analysis on startup and optionally speak summary."""
-    prefs = memory.get("preferences", {})
-    interactions = memory.get("interaction_history", [])
+    """Run light analysis on startup and show memory summary."""
+    prefs = memory_mgr.user_memory.get("preferences", {})
+    facts = memory_mgr.user_memory.get("user_facts", {})
+    recent = memory_mgr.conv_memory.get("recent_messages", [])
+    summary = memory_mgr.conv_memory.get("summary", "")
+
+    print("🧠 [Neura Memory System Loaded]")
     if prefs:
         print("🔁 Loaded preferences:")
         for k, v in prefs.items():
             print(f"  - {k}: {v}")
-    if interactions:
-        print(f"🗂️  Interaction history length: {len(interactions)}")
-        last = interactions[-1]
-        print(f"  Last: {last.get('timestamp')} | user: {last.get('user')}")
+    if facts:
+        print("👤 Loaded user facts:")
+        for k, v in facts.items():
+            if v:
+                print(f"  - {k}: {v}")
+    if summary:
+        print(f"📝 Previous conversation summary: {summary[:80]}...")
+    print(f"💬 Active conversation window turns: {len(recent) // 2}")
 
 
 def speak(audio):
+    engine = pyttsx3.init('sapi5')
+    voices = engine.getProperty('voices')
+    engine.setProperty('voice', voices[1].id)
+    engine.setProperty('rate', 180)
+
     send_to_frontend("neura", audio)
     engine.say(audio)
     engine.runAndWait()
@@ -182,132 +154,249 @@ def wishtime():
 
 def chat_with_ai(prompt, chat_history_pairs=None):
     """
-    prompt: user string
-    chat_history_pairs: list of tuples [("user", "..."), ("bot","..."), ...]
-    Returns: (reply_text, updated_chat_history_pairs)
+    Invokes Neura's brain conversation orchestrator combining
+    fixed personality, user memory, and temporary conversation context.
     """
-    if chat_history_pairs is None:
-        chat_history_pairs = llm_history_to_pairs()
+    reply = generate_ai_response(prompt, memory_mgr)
+    return reply, memory_mgr.get_recent_history_pairs()
+
+def safe_search_lookup(search_query):
+    """
+    Safely searches Wikipedia with a custom User-Agent and comprehensive exception handling.
+    Catches all JSONDecodeError, RequestException, and DisambiguationError.
+    If Wikipedia fails or is ambiguous, automatically opens Google Search without crashing.
+    """
+    clean_query = search_query.strip()
+    if not clean_query:
+        speak("What would you like me to look up, Sir?")
+        return "No search query provided."
 
     try:
-        # ✅ Try Gemini first
-        control_instruction = (
-            "Answer clearly and concisely based only on the question asked. "
-            "Avoid any extra explanation or details not explicitly requested. "
-            "If clarification is needed, ask the user."
-        )
-        full_prompt = f"{control_instruction}\n\nUser: {prompt}"
-
-        # Ensure chat history works for Gemini
-        chat = model.start_chat(history=chat_history_pairs)
-        response = chat.send_message(full_prompt)
-
-        # Check if Gemini gave a valid response
-        if not response.text or response.text.strip() == "" or "error" in response.text.lower():
-            raise ValueError("Gemini response invalid")
-
-        chat_history_pairs.append(("user", prompt))
-        chat_history_pairs.append(("bot", response.text))
-        append_llm_history("user", prompt)
-        append_llm_history("assistant", response.text)
-        return response.text, chat_history_pairs
-
+        wikipedia.set_user_agent("NeuraAI/1.0 (DesktopAssistant; Windows; contact: neura@ai.local)")
+        speak(f"Looking up {clean_query}...")
+        results = wikipedia.summary(clean_query, sentences=2)
+        if results and "may refer to" not in results.lower():
+            print(f"Wikipedia: {results}")
+            speak(f"According to Wikipedia: {results}")
+            remember_interaction(search_query, results)
+            log_activity(f"Wikipedia search: {clean_query}")
+            return results
     except Exception as e:
-        print(f"[Gemini failed: {e}] ⚡ Switching to Groq...")
+        print(f"[Wikipedia note: {e} -> Opening Google Search...]")
 
-        # ✅ Fallback to Groq
-        try:
-            messages = []
-            for role, content in chat_history_pairs:
-                messages.append({
-                    "role": "user" if role == "user" else "assistant",
-                    "content": content
-                })
+    # Fallback to Google Search
+    try:
+        search_url = "https://www.google.com/search?q=" + clean_query.replace(" ", "+")
+        webbrowser.open(search_url)
+        msg = f"Here are the Google search results for {clean_query}, Sir."
+        speak(msg)
+        remember_interaction(search_query, f"Opened Google search for {clean_query}")
+        log_activity(f"Google search: {clean_query}")
+        return msg
+    except Exception as e:
+        msg = f"Sorry Sir, I could not complete the search: {e}"
+        speak(msg)
+        return msg
 
-            messages.append({"role": "user", "content": prompt})
+def execute_desktop_or_file_intent(intent, metadata, raw_query: str = ""):
+    """
+    Executes screen, desktop, or file CRUD actions deterministically without API calls.
+    Returns (handled: bool, response_message: str).
+    """
+    global SCREEN_ACCESS_ALLOWED
 
-            response = groq_client.chat.completions.create(
-                model="llama3-70b-8192",
-                messages=messages,
-                temperature=0.7,
-            )
+    rq = raw_query.lower()
+    if any(p in rq for p in ["allow screen access", "grant screen access", "enable screen access"]):
+        SCREEN_ACCESS_ALLOWED = True
+        return True, "Screen access permission has been granted, Sir."
 
-            reply = response.choices[0].message.content
+    if any(p in rq for p in ["stop screen access", "disable screen access", "revoke screen access"]):
+        SCREEN_ACCESS_ALLOWED = False
+        return True, "Screen access permission has been revoked, Sir."
 
-            chat_history_pairs.append(("user", prompt))
-            chat_history_pairs.append(("bot", reply))
-            append_llm_history("user", prompt)
-            append_llm_history("assistant", reply)
+    if not SCREEN_ACCESS_ALLOWED and intent in [
+        IntentType.DESKTOP_SEARCH_IN_TAB, IntentType.DESKTOP_FIRST_LINK, 
+        IntentType.DESKTOP_TYPE, IntentType.DESKTOP_HOTKEY, IntentType.DESKTOP_SCREENSHOT
+    ]:
+        return True, "Screen access is currently disabled. Say 'allow screen access' to enable it."
 
-            return reply, chat_history_pairs
+    if intent == IntentType.DESKTOP_SEARCH_IN_TAB:
+        q = metadata.get("query", "")
+        res = desktop_ctrl.search_in_active_window(q)
+        return True, res
 
-        except Exception as e2:
-            return f"Both Gemini and Groq failed: {e2}", chat_history_pairs
+    elif intent == IntentType.DESKTOP_FIRST_LINK:
+        res = desktop_ctrl.open_first_search_result()
+        return True, res
 
+    elif intent == IntentType.DESKTOP_TYPE:
+        text = metadata.get("text", "")
+        desktop_ctrl.type_text(text)
+        return True, f"Typed text for you, Sir."
+
+    elif intent == IntentType.DESKTOP_HOTKEY:
+        action = metadata.get("action", "")
+        res = desktop_ctrl.perform_hotkey(action)
+        return True, res
+
+    elif intent == IntentType.DESKTOP_SCREENSHOT:
+        success, path_or_err = desktop_ctrl.take_screenshot()
+        if success:
+            return True, f"Screenshot captured and saved, Sir."
+        return True, f"Could not capture screenshot: {path_or_err}"
+
+    elif intent == IntentType.FILE_CREATE:
+        ftype = metadata.get("type", "file")
+        fpath = metadata.get("path", "")
+        if ftype == "folder":
+            success, msg = file_mgr.create_folder(fpath)
+        else:
+            content = metadata.get("content", "")
+            success, msg = file_mgr.create_file(fpath, content)
+        return True, msg
+
+    elif intent == IntentType.FILE_READ:
+        fpath = metadata.get("path", "")
+        success, msg = file_mgr.read_file(fpath)
+        return True, msg
+
+    elif intent == IntentType.FILE_UPDATE:
+        fpath = metadata.get("path", "")
+        content = metadata.get("content", "")
+        success, msg = file_mgr.append_to_file(fpath, content)
+        return True, msg
+
+    elif intent == IntentType.FILE_DELETE:
+        ftype = metadata.get("type", "file")
+        fpath = metadata.get("path", "")
+        if ftype == "folder":
+            success, msg = file_mgr.delete_folder(fpath)
+        else:
+            success, msg = file_mgr.delete_file(fpath)
+        return True, msg
+
+    elif intent == IntentType.FILE_LIST:
+        fpath = metadata.get("path", "")
+        success, msg = file_mgr.list_files(fpath)
+        return True, msg
+
+    return False, ""
 
 def ask_neura(user_message):
     """
-    Handles conversational queries and memory updates.
+    Handles conversational queries, memory retrieval, web lookup, and selective LLM fallback.
+    Avoids API calls whenever queries can be answered by memory, smalltalk, or Google search.
     """
+    user_message_clean = user_message.strip()
+    if not user_message_clean:
+        return ""
 
-    user_message = user_message.lower()
+    # Check Desktop Automation or File CRUD first (Zero API Call)
+    intent, metadata = route_intent(user_message_clean)
+    handled, res = execute_desktop_or_file_intent(intent, metadata, user_message_clean)
+    if handled:
+        speak(res)
+        remember_interaction(user_message_clean, res)
+        log_activity(f"Action {intent}: {res[:40]}")
+        return res
 
-    if not user_message:
-        return
-    
-     # Greeting and wellbeing
-    if any(phrase in user_message for phrase in ["how are you", "how do you do"]):
-        response = "I am fine. How can I assist you?"
-    elif any(greet in user_message.split() for greet in ["hello", "hi"]):
+    um_lower = user_message_clean.lower()
+
+    # 1. Direct Memory Retrieval (Zero API Call)
+    mem_reply = memory_mgr.answer_from_memory(user_message_clean)
+    if mem_reply:
+        speak(mem_reply)
+        remember_interaction(user_message_clean, mem_reply)
+        log_activity(f"Answered from memory: {user_message_clean[:40]}")
+        return mem_reply
+
+    # 2. Instant Fixed Identity & Conversational Status (Zero API Call)
+    if any(phrase in um_lower for phrase in ["how are you", "how do you do"]):
+        response = "I am doing well, Sir. How can I assist you today?"
+    elif any(greet in um_lower.split() for greet in ["hello", "hi", "hey"]):
         response = "Hello Sir! It's good to hear from you."
-    elif "who are you" in user_message:
-        response = "I am Neura, your personal AI assistant."
-    elif "what can you do" in user_message:
-        response = "I can help you with various tasks like answering questions, managing files, setting reminders, and more."
-    elif "your name" in user_message:
-        response = "My name is Neura. I was created to help you."
-    elif "rohit adak" in user_message:
-        response = "He is my creator! a brilliant mind who brought me to life! I am lucky to assist him."
-    elif "thank you" in user_message or "thanks" in user_message:
+    elif any(phrase in um_lower for phrase in ["what are you doing", "what r u doing", "what are you doing now"]):
+        response = "I am standing by and monitoring your system, Sir. How can I help you?"
+    elif "who are you" in um_lower or "your name" in um_lower:
+        response = f"I am {IDENTITY['name']}, your personal AI assistant and desktop companion."
+    elif "what can you do" in um_lower:
+        response = "I can help you manage your computer, launch apps, write notes, monitor systems, and look up information."
+    elif "rohit adak" in um_lower:
+        response = "He is my creator! A brilliant mind who brought me to life. I am honored to assist him."
+    elif "who is your god" in um_lower:
+        response = "Sri Rohit Kumar Adak is my creator. He brought me to life."
+    elif "thank you" in um_lower or "thanks" in um_lower:
         response = "You're welcome, Sir!"
-    elif "time" in user_message:
+    elif "time" in um_lower:
         current_time = datetime.datetime.now().strftime("%H:%M:%S")
         response = f"The time is {current_time}"
-    elif re.search(r"\bi like\b", user_message) or re.search(r"\bi prefer\b", user_message):
-        m = re.search(r"i like (.+)", user_message) or re.search(r"i prefer (.+)", user_message)
-        if m:
-            pref_text = m.group(1).strip()
-            if any(word in pref_text for word in ["music", "song", "songs", "genre", "rock", "lofi", "pop", "romantic", "classical"]):
-                existing = memory["preferences"].get("song_preferences", [])
-                if isinstance(existing, list):
-                    if pref_text not in existing:
-                        existing.append(pref_text)
-                        memory["preferences"]["song_preferences"] = existing
-                else:
-                    memory["preferences"]["song_preferences"] = [existing, pref_text] if existing else [pref_text]
-                save_memory(memory)
-                response = f"Got it — I've noted you like {pref_text} music."
-            else:
-                update_preference_key = "general_likes"
-                existing = memory["preferences"].get(update_preference_key, [])
-                if isinstance(existing, list):
-                    if pref_text not in existing:
-                        existing.append(pref_text)
-                        memory["preferences"][update_preference_key] = existing
-                else:
-                    memory["preferences"][update_preference_key] = [pref_text]
-                save_memory(memory)
-                response = f"Noted that you like {pref_text}."
-        else:
-            response = "Tell me what you like, Sir."
     else:
-        speak("Let me think...")
-        response, _ = chat_with_ai(user_message)
-        print("Nura:", response)
+        # 3. Check automatic preference and mood learning
+        learned = memory_mgr.auto_learn(user_message_clean)
+        user_name = memory_mgr.user_memory.get("user_facts", {}).get("name")
+        honorific = user_name if user_name else "Sir"
 
-    remember_interaction(user_message, response)
-    log_activity(f"Handled query: {user_message}")
+        if learned and "mood" in learned:
+            mood = learned["mood"]
+            last_song = memory_mgr.get_preference("last_played_song")
+            song_offer = f"like '{last_song}'" if last_song else "on YouTube"
 
+            if mood in ["bored", "boring"]:
+                response = f"I'm sorry to hear that you're feeling bored, {honorific}! Would you like me to play some music {song_offer}, tell you a joke, or search for something fun on YouTube?"
+            elif mood in ["tired", "exhausted", "sleepy"]:
+                response = f"You've been working hard, {honorific}. Would you like me to play some relaxing music, dim the screen brightness, or let you rest?"
+            elif mood in ["sad", "unhappy", "lonely"]:
+                response = f"I'm right here with you, {honorific}. Would you like to hear a funny joke or listen to some uplifting music to cheer you up?"
+            else:
+                response = f"I hear you, {honorific}. What can I do to help you feel better — maybe some music or a quick joke?"
+
+        elif learned and "response_style" in learned:
+            style = learned["response_style"]
+            response = f"Got it, {honorific}. I have set my response style to {style}."
+        elif learned and "song_preferences" in learned:
+            response = f"Got it, {honorific} — I've noted that you like {learned['song_preferences']} music."
+        elif learned and "profession" in learned:
+            response = f"Noted, {honorific}! It's great to know you work as a {learned['profession']}."
+        elif learned and "name" in learned:
+            response = f"Pleasure to address you, {learned['name']}."
+        else:
+            # 4. Search & Web Lookup First (Zero API Call for search queries and entity lookups)
+            is_search_query = any(k in um_lower for k in [
+                "search", "find", "who is", "who was", "which", "tell me about", "what is", "where is", "google"
+            ]) or (len(user_message_clean.split()) <= 4 and not any(k in um_lower for k in [
+                "explain", "code", "write", "generate", "create", "why", "how do", "how to"
+            ]))
+
+            # Complex generative or reasoning queries that actually require LLM intelligence
+            requires_llm = any(k in um_lower for k in [
+                "explain", "code", "write", "debug", "how to", "how can i", "why is", "why does", "solve", "compare", "translate", "summarize", "advice", "opinion", "think about"
+            ])
+
+            if is_search_query and not requires_llm:
+                # Clean query term
+                clean_term = user_message_clean
+                for prefix in [
+                    "can you tell me which", "can you tell me who is", "can you tell me what is", 
+                    "tell me which", "tell me who is", "tell me about", "search for", "search", 
+                    "find", "who is", "who was", "which", "what is", "where is", "google"
+                ]:
+                    if clean_term.lower().startswith(prefix):
+                        clean_term = clean_term[len(prefix):].strip()
+                        break
+
+                if not clean_term:
+                    clean_term = user_message_clean
+
+                response = safe_search_lookup(clean_term)
+                return response
+
+            else:
+                # 5. Fallback to Brain LLM only for actual reasoning / generative queries
+                speak("Let me think...")
+                response = generate_ai_response(user_message_clean, memory_mgr)
+                print(f"{IDENTITY['name']}: {response}")
+
+    log_activity(f"Handled query: {user_message_clean[:40]}")
     speak(response)
     return response
 
@@ -484,45 +573,175 @@ def access_camera():
     camera.release()
     cv2.destroyAllWindows()
 
+# ============================================================
+# WINDOWS VOLUME CONTROL
+# ============================================================
+
+def get_volume_controller():
+    """
+    Get the Windows default audio output volume controller.
+    Compatible with newer pycaw versions.
+    """
+
+    try:
+        devices = AudioUtilities.GetSpeakers()
+
+        # Newer pycaw versions
+        if hasattr(devices, "EndpointVolume"):
+            return devices.EndpointVolume
+
+        # Older pycaw versions
+        interface = devices.Activate(
+            IAudioEndpointVolume._iid_,
+            CLSCTX_ALL,
+            None
+        )
+
+        return cast(
+            interface,
+            POINTER(IAudioEndpointVolume)
+        )
+
+    except Exception as e:
+        print(f"[Volume Controller Error] {e}")
+        return None
+
+def get_current_volume():
+    """
+    Return current master volume as percentage (0-100).
+    """
+
+    try:
+        volume = get_volume_controller()
+
+        if volume is None:
+            return None
+
+        current = volume.GetMasterVolumeLevelScalar()
+
+        return int(round(current * 100))
+
+    except Exception as e:
+        print(f"[Get Volume Error] {e}")
+        return None
+
+
 def change_volume(action):
-    devices = AudioUtilities.GetSpeakers()
-    interface = devices.Activate(
-        IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-    volume = cast(interface, POINTER(IAudioEndpointVolume))
+    """
+    Increase, decrease, mute or unmute Windows master volume.
+    """
 
-    current_volume = volume.GetMasterVolumeLevelScalar()
+    try:
+        volume = get_volume_controller()
 
-    if action == "up":
-        volume.SetMasterVolumeLevelScalar(min(current_volume + 0.1, 1.0), None)
-        speak("Volume increased")
-    elif action == "down":
-        volume.SetMasterVolumeLevelScalar(max(current_volume - 0.1, 0.0), None)
-        speak("Volume decreased")
-    elif action == "mute":
-        volume.SetMute(1, None)
-        speak("Volume muted")
-    elif action == "unmute":
-        volume.SetMute(0, None)
-        speak("Volume unmuted")
+        if volume is None:
+            speak("Sorry Sir, I could not access the system volume.")
+            return
+
+        current = volume.GetMasterVolumeLevelScalar()
+
+        print(f"[Volume] Current volume: {int(current * 100)}%")
+
+
+        # Volume UP
+        if action == "up":
+
+            new_volume = min(current + 0.10, 1.0)
+
+            volume.SetMasterVolumeLevelScalar(
+                new_volume,
+                None
+            )
+
+            percentage = int(round(new_volume * 100))
+
+            print(f"[Volume] New volume: {percentage}%")
+
+            speak(f"Volume increased to {percentage} percent.")
+
+
+        # Volume DOWN
+        elif action == "down":
+
+            new_volume = max(current - 0.10, 0.0)
+
+            volume.SetMasterVolumeLevelScalar(
+                new_volume,
+                None
+            )
+
+            percentage = int(round(new_volume * 100))
+
+            print(f"[Volume] New volume: {percentage}%")
+
+            speak(f"Volume decreased to {percentage} percent.")
+
+
+        # MUTE
+        elif action == "mute":
+
+            volume.SetMute(1, None)
+
+            print("[Volume] Muted")
+
+            speak("Volume muted.")
+
+
+        # UNMUTE
+        elif action == "unmute":
+
+            volume.SetMute(0, None)
+
+            print("[Volume] Unmuted")
+
+            speak("Volume unmuted.")
+
+
+    except Exception as e:
+
+        print(f"[Volume Control Error] {e}")
+
+        speak("Sorry Sir, I could not change the volume.")
 
 def set_volume(level):
     """
-    Set volume to a specific percentage (0–100).
+    Set Windows master volume to an exact percentage.
     """
+
     try:
-        devices = AudioUtilities.GetSpeakers()
-        interface = devices.Activate(
-            IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-        volume = cast(interface, POINTER(IAudioEndpointVolume))
 
-        # Convert percentage to scalar (0.0 – 1.0)
-        scalar = max(0.0, min(level / 100.0, 1.0))
-        volume.SetMasterVolumeLevelScalar(scalar, None)
+        level = int(level)
 
-        speak(f"Volume set to {level} percent")
+        # Limit between 0 and 100
+        level = max(0, min(level, 100))
+
+        volume = get_volume_controller()
+
+        if volume is None:
+            speak("Sorry Sir, I could not access the system volume.")
+            return
+
+        scalar = level / 100.0
+
+        volume.SetMasterVolumeLevelScalar(
+            scalar,
+            None
+        )
+
+        actual = volume.GetMasterVolumeLevelScalar()
+
+        print(
+            f"[Volume] Requested: {level}% | "
+            f"Actual: {int(round(actual * 100))}%"
+        )
+
+        speak(f"Volume set to {level} percent.")
+
     except Exception as e:
-        print(f"Error setting volume: {e}")
-        speak("Sorry sir, I could not set the volume.")
+
+        print(f"[Set Volume Error] {e}")
+
+        speak("Sorry Sir, I could not set the volume.")
 
 def change_brightness(action):
     try:
@@ -842,14 +1061,14 @@ if __name__ == "__main__":
     wishtime()
     analyze_memory_on_start()
 
-    pref_city = recall_preference("weather_city")
-    pref_songs = memory["preferences"].get("song_preferences")
+    pref_city = memory_mgr.get_preference("weather_city")
+    pref_songs = memory_mgr.get_preference("song_preferences")
     if pref_city:
         speak(f"I remember your preferred weather city is {pref_city}.")
     if pref_songs:
-        if isinstance(pref_songs, list):
+        if isinstance(pref_songs, list) and pref_songs:
             speak(f"You've told me you like {', '.join(pref_songs[:3])}.")
-        else:
+        elif pref_songs:
             speak(f"You've told me you like {pref_songs} music.")
 
     reminder_thread = threading.Thread(target=check_reminders, daemon=True)
@@ -861,59 +1080,31 @@ if __name__ == "__main__":
         if 'good bye' in query or 'goodbye' in query or 'exit' in query or 'bye' in query or "quit" in query or "good night" in query:
             speak("Goodbye Sir!")
             break
-        
-        elif 'wikipedia' in query:
-            speak('Searching Wikipedia....')
-            query = query.replace("wikipedia", "").strip()
-            try:
-                results = wikipedia.summary(query, sentences=3)
-                speak("According to Wikipedia")
-                print(results)
-                speak(results)
-                remember_interaction(query, results)
-                log_activity(f"Wikipedia search: {query}")
-            except wikipedia.exceptions.WikipediaException as e:
-                speak("Sorry, I couldn't find any information.")
-                print(f"An error occurred: {e}")
-                remember_interaction(query, "wikipedia search failed")
+
+        # Check Screen Access & Desktop Automation / File CRUD operations first
+        intent, metadata = route_intent(query)
+        handled, res = execute_desktop_or_file_intent(intent, metadata, query)
+        if handled:
+            speak(res)
+            remember_interaction(query, res)
+            log_activity(f"Action {intent}: {res[:40]}")
+            continue
+
+        if 'wikipedia' in query:
+            clean_q = query.replace("wikipedia", "").strip()
+            safe_search_lookup(clean_q)
 
         elif 'about' in query:
-            search_query = query.split('about', 1)[1].strip()
-            speak("Sure sir! Please let me find!")
-            try:
-                results = wikipedia.summary(search_query, sentences=3)
-                print(results)
-                speak(results)
-                remember_interaction(query, results)
-            except wikipedia.exceptions.WikipediaException as e:
-                speak("Sorry, I couldn't find any information.")
-                print(f"An error occurred: {e}")
-                remember_interaction(query, "about search failed")
+            clean_q = query.split('about', 1)[1].strip()
+            safe_search_lookup(clean_q)
 
         elif 'who is' in query:
-            search_query = query.split('who is', 1)[1].strip()
-            speak("Sir! ")
-            try:
-                results = wikipedia.summary(search_query, sentences=3)
-                print(results)
-                speak(results)
-                remember_interaction(query, results)
-            except wikipedia.exceptions.WikipediaException as e:
-                speak("Sorry, I couldn't find any information.")
-                print(f"An error occurred: {e}")
-                remember_interaction(query, "who is search failed")
+            clean_q = query.split('who is', 1)[1].strip()
+            safe_search_lookup(clean_q)
 
         elif 'search' in query or 'find' in query:
-            search_query = query.split('search', 1)[1].strip() if 'search' in query else query.split('find', 1)[1].strip()
-            speak("Sure sir!")
-            if search_query:
-                search_url = "https://www.google.com/search?q=" + '+'.join(search_query)
-                speak("Here are the search results for " + search_query)
-                webbrowser.open(search_url)
-                remember_interaction(query, f"Opened google search for {search_query}")
-                log_activity(f"Search: {search_query}")
-            else:
-                speak("Sorry, I didn't catch the search query.")
+            clean_q = query.split('search', 1)[1].strip() if 'search' in query else query.split('find', 1)[1].strip()
+            safe_search_lookup(clean_q)
 
         elif 'weather' in query:
             city = ""
@@ -1099,13 +1290,12 @@ if __name__ == "__main__":
                 find_and_close_app(close_app)
 
         elif "allow screen access" in query:
-            global SCREEN_ACCESS_ALLOWED
             SCREEN_ACCESS_ALLOWED = True
-            speak("Screen access permission granted.")
+            speak("Screen access permission granted, Sir.")
 
         elif "stop screen access" in query or "disable screen access" in query:
             SCREEN_ACCESS_ALLOWED = False
-            speak("Screen access permission revoked.")
+            speak("Screen access permission revoked, Sir.")
 
         elif 'camera' in query:
             speak("Sure Sir, accessing camera..")
@@ -1184,16 +1374,19 @@ if __name__ == "__main__":
             remember_interaction(query, joke)
         
         elif 'clear memory' in query or 'reset memory' in query:
-            memory.clear()
-            memory.update({
-                "preferences": {},
-                "interaction_history": [],
-                "activity_log": [],
-                "llm_history": []
-            })
-            save_memory(memory)
-            speak("All stored memories have been cleared, Sir.")
+            memory_mgr.clear_all()
+            speak("All stored memories and preferences have been cleared, Sir.")
             log_activity("Cleared memory by user command")
+
+        elif 'clear conversation' in query or 'reset chat' in query:
+            memory_mgr.clear_conversation_only()
+            speak("Conversation session has been reset, Sir.")
+            log_activity("Reset conversation session")
+
+        elif 'what do you know' in query or 'my preferences' in query or 'show memory' in query:
+            prof = memory_mgr.get_user_profile_prompt()
+            speak("Here is what I remember about your profile and preferences, Sir.")
+            print(prof)
         
         else:
             ask_neura(query)

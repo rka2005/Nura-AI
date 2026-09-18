@@ -1,3 +1,8 @@
 .env
+venv
 neura_memory.json
 chat_bridge.json
+__pycache__/
+*__pycache__/
+conversation_memory.json
+user_memory.json
