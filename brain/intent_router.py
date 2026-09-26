@@ -11,6 +11,7 @@ class IntentType:
     SYSTEM_VOLUME = "SYSTEM_VOLUME"
     SYSTEM_BRIGHTNESS = "SYSTEM_BRIGHTNESS"
     SYSTEM_CAMERA = "SYSTEM_CAMERA"
+    VISION_FACE_RECOGNIZE = "VISION_FACE_RECOGNIZE"
     SYSTEM_APP_OPEN = "SYSTEM_APP_OPEN"
     SYSTEM_APP_CLOSE = "SYSTEM_APP_CLOSE"
     SYSTEM_NOTES = "SYSTEM_NOTES"
@@ -199,6 +200,15 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
         if numbers:
             return IntentType.SYSTEM_BRIGHTNESS, {"action": "set", "level": int(numbers[0])}
         return IntentType.SYSTEM_BRIGHTNESS, {"action": "ask_level"}
+
+    # Vision / Face Recognition
+    if any(phrase in q for phrase in [
+        'recognize face', 'recognize my face', 'face recognition', 'scan my face',
+        'scan face', 'verify face', 'verify my identity', 'verify identity',
+        'who is in front of the camera', 'who is at the camera', 'who is in camera',
+        'look at me', 'who am i', 'identify me', 'identify face'
+    ]):
+        return IntentType.VISION_FACE_RECOGNIZE, {}
 
     # Camera
     if any(c in q for c in ['camera', 'open camera', 'webcam', 'take photo']):

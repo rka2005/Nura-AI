@@ -30,8 +30,15 @@ from brain.personality import IDENTITY, get_personality_prompt
 from brain.intent_router import route_intent, IntentType
 from brain.desktop_controller import DesktopController
 from brain.file_manager import FileManager
+from vision.face_recognition import (
+    get_face_system,
+    recognize_owner_from_camera,
+    clean_extracted_name,
+    is_refusal_response
+)
 
 CHAT_BRIDGE_FILE = "chat_bridge.json"
+AUTO_LEARN_BRIDGE_FILE = "auto_learn_bridge.json"
 load_dotenv()
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
@@ -302,6 +309,12 @@ def ask_neura(user_message):
     if not user_message_clean:
         return ""
 
+    um_lower = user_message_clean.lower()
+
+    # Visual Biometric Face Identity Verification ("who am i")
+    if any(p in um_lower for p in ["who am i", "who i am", "tell me who i am", "do you know who i am", "do you know who am i"]):
+        return identify_user_by_face()
+
     # Check Desktop Automation or File CRUD first (Zero API Call)
     intent, metadata = route_intent(user_message_clean)
     handled, res = execute_desktop_or_file_intent(intent, metadata, user_message_clean)
@@ -335,7 +348,7 @@ def ask_neura(user_message):
     elif "rohit adak" in um_lower:
         response = "He is my creator! A brilliant mind who brought me to life. I am honored to assist him."
     elif "who is your god" in um_lower:
-        response = "Sri Rohit Kumar Adak is my creator. He brought me to life."
+        response = "Rohit Kumar Adak is my creator. He brought me to life."
     elif "thank you" in um_lower or "thanks" in um_lower:
         response = "You're welcome, Sir!"
     elif "time" in um_lower:
@@ -556,6 +569,105 @@ def find_folder(base_path, spoken_name):
         return None
 
 
+def perform_face_recognition(show_window: bool = True):
+    """
+    Executes the Face Recognition pipeline:
+    Camera -> Face Detection (YuNet) -> Face Embedding (SFace) -> Compare with Rohit's enrolled embedding -> Identity -> Neura's memory/state
+    """
+    global SCREEN_ACCESS_ALLOWED
+    if not SCREEN_ACCESS_ALLOWED:
+        speak("Screen access is disabled. Please say allow screen access first.")
+        return
+
+    speak("Activating camera for biometric face recognition...")
+    system = get_face_system()
+    res = system.recognize_from_camera(timeout_seconds=5.0, show_window=show_window)
+    speech = system.update_neura_state(res, memory_mgr)
+    speak(speech)
+    remember_interaction("Face recognition via camera", speech)
+    return res
+
+
+def identify_user_by_face():
+    """
+    Biometric face verification to answer 'who am i'.
+    Detects face from camera:
+    - If enrolled owner (Rohit Kumar Adak): 'You are my owner, Rohit Kumar Adak'
+    - If known registered person (e.g. Sneha): 'You are Sneha.'
+    - Otherwise: 'Sorry, I don't know who you are.'
+    """
+    global SCREEN_ACCESS_ALLOWED
+    if not SCREEN_ACCESS_ALLOWED:
+        speak("Screen access is disabled. Please say allow screen access first.")
+        return "Screen access disabled"
+
+    system = get_face_system()
+    is_owner = False
+    identity = "Unknown"
+    camera = None
+
+    # 1. Attempt live capture and recognition with YuNet + SFace
+    try:
+        camera = cv2.VideoCapture(0)
+        if camera.isOpened():
+            camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            frame = None
+            for _ in range(5):
+                ret, tmp = camera.read()
+                if ret and tmp is not None:
+                    frame = tmp
+                time.sleep(0.03)
+
+            if frame is not None:
+                results, _ = system.process_frame(frame, draw_overlay=False, mirror_display=False)
+                if results and len(results) > 0:
+                    primary = results[0]
+                    if primary.get("is_owner"):
+                        is_owner = True
+                        identity = system.owner_profile.get("name") or "Owner"
+                    elif primary.get("is_known"):
+                        identity = primary.get("identity", "Unknown")
+    except Exception as e:
+        print(f"[Face ID Camera Error]: {e}")
+    finally:
+        if camera is not None:
+            camera.release()
+
+    # 2. Fallback to shared presence/state if camera was locked by frontend
+    if not is_owner and identity == "Unknown":
+        try:
+            memory_mgr.load_all()
+            facts = memory_mgr.user_memory.get("user_facts", {})
+            presence = facts.get("presence", "")
+            if facts.get("face_authenticated", False) and presence == "present":
+                is_owner = True
+                identity = system.owner_profile.get("name") or "Owner"
+            elif presence.startswith("guest_"):
+                guest_name = presence.replace("guest_", "").replace("_present", "").strip()
+                if guest_name:
+                    identity = guest_name
+        except Exception:
+            pass
+
+    owner_name = system.owner_profile.get("name") or "Owner"
+    owner_title = system.owner_profile.get("title") or (f"Rohit Kumar Adak" if "rohit" in owner_name.lower() else owner_name)
+
+    if is_owner:
+        memory_mgr.add_fact("face_authenticated", True)
+        memory_mgr.add_fact("presence", "present")
+        response = f"You are my owner, {owner_title}"
+    elif identity != "Unknown" and identity != "None":
+        response = f"You are {identity}."
+    else:
+        response = "Sorry, I don't know who you are."
+
+    speak(response)
+    remember_interaction("who am i", response)
+    log_activity(f"Visual ID answer: {response}")
+    return response
+
+
 def access_camera():
     global SCREEN_ACCESS_ALLOWED
 
@@ -563,26 +675,96 @@ def access_camera():
         speak("Screen access is disabled. Please say allow screen access first.")
         return
 
+    system = get_face_system()
     camera = cv2.VideoCapture(0)
 
-    while True:
-        ret, frame = camera.read()
+    if not camera.isOpened():
+        speak("Unable to access the camera, Sir.")
+        return
 
-        cv2.imshow('Camera Feed', frame)
+    active_person_spoken = None
+    candidate_person = None
+    candidate_streak = 0
+    no_face_start_time = 0.0
+    last_spoken_time = 0.0
 
-        command = takeCommand()
+    def async_camera_speak(text: str):
+        threading.Thread(target=speak, args=(text,), daemon=True).start()
 
-        if 'capture' in command:
-            image_name = "captured_image.jpg"
-            cv2.imwrite(image_name, frame)
-            speak("Image captured successfully.")
-            break
-        elif 'exit camera' in command:
-            break
+    window_title = 'Neura Vision Feed - [Q] Exit | [C] Capture'
 
-    # Release the camera
-    camera.release()
-    cv2.destroyAllWindows()
+    try:
+        while True:
+            ret, frame = camera.read()
+            if not ret:
+                break
+
+            # Process frame with YuNet face detection & SFace recognition overlay (mirrored display for natural preview)
+            results, annotated = system.process_frame(frame, draw_overlay=True, mirror_display=True)
+            now = time.time()
+
+            if results and len(results) > 0:
+                no_face_start_time = 0.0
+                primary = results[0]
+                is_owner = primary.get("is_owner", False)
+                is_known = primary.get("is_known", False)
+                identity_name = primary.get("identity", "Unknown")
+
+                if is_owner:
+                    cand = system.owner_profile.get("name") or identity_name
+                elif is_known:
+                    cand = identity_name
+                else:
+                    cand = "UNKNOWN"
+
+                if cand == candidate_person:
+                    candidate_streak += 1
+                else:
+                    candidate_person = cand
+                    candidate_streak = 1
+
+                # If face is stable for >= 3 frames and identity changed, tell the name as per HUD text
+                if candidate_streak >= 3 and cand != active_person_spoken:
+                    if (now - last_spoken_time) >= 1.5:
+                        active_person_spoken = cand
+                        last_spoken_time = now
+                        if is_owner:
+                            async_camera_speak(f"Hello Sir, identity verified! Welcome, {cand}.")
+                        elif is_known:
+                            async_camera_speak(f"Hello {cand}, welcome!")
+                        else:
+                            active_person_spoken = "UNKNOWN"
+                            try:
+                                from setup_face import _execute_auto_learning_procedure
+                                _execute_auto_learning_procedure(camera, system, window_title)
+                                system.load_known_faces()
+                            except Exception as e:
+                                print(f"[Neura Camera Auto-Learn Error]: {e}")
+                                async_camera_speak("Unknown face detected.")
+            else:
+                candidate_person = None
+                candidate_streak = 0
+                if no_face_start_time == 0.0:
+                    no_face_start_time = now
+                elif (now - no_face_start_time) >= 1.5:
+                    if active_person_spoken != "NO_FACE":
+                        active_person_spoken = "NO_FACE"
+                        last_spoken_time = now
+                        async_camera_speak("No face is detected.")
+
+            cv2.imshow(window_title, annotated)
+
+            key = cv2.waitKey(1) & 0xFF
+            if key in (ord('q'), ord('Q'), 27):
+                break
+            elif key in (ord('c'), ord('C')):
+                image_name = f"captured_{int(time.time())}.jpg"
+                cv2.imwrite(image_name, frame)
+                async_camera_speak("Image captured successfully.")
+
+    finally:
+        camera.release()
+        cv2.destroyAllWindows()
 
 # ============================================================
 # WINDOWS VOLUME CONTROL
@@ -1092,6 +1274,28 @@ if __name__ == "__main__":
             speak("Goodbye Sir!")
             break
 
+        # Check if auto-learning was triggered by frontend (asking unknown person for their name)
+        if os.path.exists(AUTO_LEARN_BRIDGE_FILE):
+            try:
+                with open(AUTO_LEARN_BRIDGE_FILE, "r", encoding="utf-8") as f:
+                    bridge_data = json.load(f)
+                if bridge_data.get("active", False) and not bridge_data.get("acquired_name"):
+                    if is_refusal_response(query):
+                        bridge_data["acquired_name"] = "__ANONYMOUS__"
+                        with open(AUTO_LEARN_BRIDGE_FILE, "w", encoding="utf-8") as f:
+                            json.dump(bridge_data, f)
+                        print("👤 [Neura Backend] User replied 'no' -> registered as __ANONYMOUS__")
+                        continue
+                    extracted = clean_extracted_name(query)
+                    if extracted and len(extracted) >= 2 and extracted.lower() not in ["none", "quit", "exit"]:
+                        bridge_data["acquired_name"] = extracted
+                        with open(AUTO_LEARN_BRIDGE_FILE, "w", encoding="utf-8") as f:
+                            json.dump(bridge_data, f)
+                        print(f"👤 [Neura Backend] Captured name for auto-learning: {extracted}")
+                        continue
+            except Exception:
+                pass
+
         # Check Screen Access & Desktop Automation / File CRUD operations first
         intent, metadata = route_intent(query)
         handled, res = execute_desktop_or_file_intent(intent, metadata, query)
@@ -1307,6 +1511,19 @@ if __name__ == "__main__":
         elif "stop screen access" in query or "disable screen access" in query:
             SCREEN_ACCESS_ALLOWED = False
             speak("Screen access permission revoked, Sir.")
+
+        elif any(phrase in query for phrase in [
+            'who am i', 'who i am', 'tell me who i am', 'do you know who i am', 'do you know who am i'
+        ]):
+            identify_user_by_face()
+
+        elif any(phrase in query for phrase in [
+            'recognize face', 'recognize my face', 'face recognition', 'scan my face',
+            'scan face', 'verify face', 'verify identity', 'verify my identity',
+            'who is in front of the camera', 'who is at the camera', 'who is in camera',
+            'look at me', 'scan my identity', 'identify me', 'identify face'
+        ]):
+            perform_face_recognition(show_window=True)
 
         elif 'camera' in query:
             speak("Sure Sir, accessing camera..")

@@ -13,11 +13,167 @@ from collections import deque
 import json
 import time
 import datetime
+import threading
+import queue
+import pyttsx3
+import pythoncom
+import win32com.client
+
+from vision.face_recognition import (
+    get_face_system,
+    clean_extracted_name,
+    is_refusal_response,
+    get_next_anonymous_name
+)
+from memory.memory_manager import MemoryManager
 
 # ------------- CONFIGURATION & BRIDGES -------------
 CHAT_BRIDGE_FILE = "chat_bridge.json"
 INPUT_BRIDGE_FILE = "input_bridge.json"
 STATUS_BRIDGE_FILE = "status_bridge.json"
+AUTO_LEARN_BRIDGE_FILE = "auto_learn_bridge.json"
+
+# ------------- BIOMETRIC FACE TRACKING & GREETINGS -------------
+FACE_STATE_STARTUP = "STARTUP_WAITING_OWNER"
+FACE_STATE_OWNER_PRESENT = "OWNER_PRESENT"
+FACE_STATE_GUEST_PRESENT = "GUEST_PRESENT"
+FACE_STATE_NO_FACE = "NO_FACE"
+FACE_STATE_UNKNOWN = "UNKNOWN"
+
+CURRENT_FACE_STATE = FACE_STATE_STARTUP
+CURRENT_FACE_LABEL = "SEARCHING FOR TARGET..."
+CURRENT_FACE_CONF = 0.0
+CURRENT_FACE_IS_OWNER = False
+CURRENT_FACE_IDENTITY = "Unknown"
+
+face_system = None
+mem_manager = None
+
+# Tracking timers, debouncing, and identity memory
+active_person_spoken = None
+candidate_person = None
+candidate_streak = 0
+no_face_start_time = 0.0
+last_speech_time = 0.0
+is_first_startup_greeting = True
+
+# Auto-Learning (Registration of Unknown Faces) State
+is_learning_active = False
+learning_step = "IDLE"  # "IDLE", "ASKED_NAME", "CAPTURING", "ENROLLING"
+learning_name = None
+learning_samples = []
+learning_started_time = 0.0
+last_unknown_prompt_time = 0.0
+UNKNOWN_PROMPT_COOLDOWN = 14.0
+last_sample_cap_time = 0.0
+TARGET_AUTO_SAMPLES = 5
+
+def trigger_voice_name_listener():
+    """Listens for person's name in a separate thread so GUI doesn't freeze."""
+    def _worker():
+        global learning_name
+        try:
+            import speech_recognition as sr
+            r = sr.Recognizer()
+            r.energy_threshold = 280
+            r.dynamic_energy_threshold = True
+            with sr.Microphone() as source:
+                r.adjust_for_ambient_noise(source, duration=0.6)
+                audio = r.listen(source, timeout=6.0, phrase_time_limit=4.5)
+                text = r.recognize_google(audio, language="en-in")
+                print(f"[Frontend Auto-Learn] Heard spoken: '{text}'")
+                if is_refusal_response(text):
+                    learning_name = "__ANONYMOUS__"
+                    print("[Frontend Auto-Learn] User replied 'no'/refusal -> assigning anonymous profile.")
+                else:
+                    c_name = clean_extracted_name(text)
+                    if c_name and len(c_name) >= 2:
+                        learning_name = c_name
+                        print(f"[Frontend Auto-Learn] Captured name via voice: {c_name}")
+        except Exception as e:
+            pass
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+
+# Asynchronous Threaded TTS Queue for Frontend Speech (SAPI.SpVoice)
+_tts_queue = queue.Queue()
+
+def _tts_worker():
+    try:
+        pythoncom.CoInitialize()
+    except Exception:
+        pass
+
+    speaker = None
+    try:
+        speaker = win32com.client.Dispatch("SAPI.SpVoice")
+        voices = speaker.GetVoices()
+        if voices.Count > 1:
+            speaker.Voice = voices.Item(1)
+        speaker.Rate = 1
+    except Exception as e:
+        print("[Frontend SAPI init error]:", e)
+
+    while True:
+        text = _tts_queue.get()
+        if text is None:
+            break
+        if speaker is not None:
+            try:
+                speaker.Speak(text, 0)
+            except Exception as e:
+                print("[Frontend TTS speak error]:", e)
+                try:
+                    pythoncom.CoInitialize()
+                    speaker = win32com.client.Dispatch("SAPI.SpVoice")
+                    voices = speaker.GetVoices()
+                    if voices.Count > 1:
+                        speaker.Voice = voices.Item(1)
+                    speaker.Rate = 1
+                    speaker.Speak(text, 0)
+                except Exception as err2:
+                    print("[Frontend TTS retry error]:", err2)
+        else:
+            try:
+                eng = pyttsx3.init('sapi5')
+                voices = eng.getProperty('voices')
+                if len(voices) > 1:
+                    eng.setProperty('voice', voices[1].id)
+                eng.setProperty('rate', 180)
+                eng.say(text)
+                eng.runAndWait()
+                del eng
+            except Exception as err3:
+                print("[TTS fallback error]:", err3)
+        _tts_queue.task_done()
+
+_tts_thread = threading.Thread(target=_tts_worker, daemon=True)
+_tts_thread.start()
+
+def frontend_speak(text: str):
+    """Speaks text via background TTS and records it in chat feed & bridge."""
+    now_str = datetime.datetime.now().strftime("%H:%M:%S")
+    payload = {"role": "neura", "message": text, "time": now_str}
+    CHAT_MESSAGES.append(payload)
+
+    try:
+        data = []
+        if os.path.exists(CHAT_BRIDGE_FILE):
+            with open(CHAT_BRIDGE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if not isinstance(data, list):
+                    data = []
+        data.append(payload)
+        temp_bridge_file = f"{CHAT_BRIDGE_FILE}.tmp"
+        with open(temp_bridge_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_bridge_file, CHAT_BRIDGE_FILE)
+    except Exception as e:
+        print("Chat bridge write error:", e)
+
+    _tts_queue.put(text)
 
 CHAT_MESSAGES = deque(maxlen=40)  # Stores dicts: {"role": ..., "message": ..., "time": ...}
 CHAT_SCROLL_OFFSET = 0
@@ -805,7 +961,13 @@ def draw_input_box(surface):
             cy = box_rect.centery - 8
             pygame.draw.line(surface, accent, (cx, cy), (cx, cy + 16), 2)
     else:
-        ph_surf = font.render("Type command or ask Neura (Enter to send)...", True, (100, 130, 170))
+        if is_learning_active and learning_step == "ASKED_NAME":
+            ph_text = "Tell or type your name (e.g. Sneha)..."
+            ph_col = (255, 190, 80)
+        else:
+            ph_text = "Type command or ask Neura (Enter to send)..."
+            ph_col = (100, 130, 170)
+        ph_surf = font.render(ph_text, True, ph_col)
         surface.blit(ph_surf, (box_rect.x + 10, box_rect.centery - ph_surf.get_height() // 2))
         if INPUT_ACTIVE and CURSOR_VISIBLE:
             pygame.draw.line(surface, accent, (box_rect.x + 10, box_rect.centery - 8), (box_rect.x + 10, box_rect.centery + 8), 2)
@@ -821,13 +983,56 @@ def draw_input_box(surface):
     surface.blit(b_text, b_text.get_rect(center=send_rect.center))
 
 
+def handle_user_input_submission():
+    global USER_INPUT_TEXT, learning_name, is_learning_active, learning_step
+    text = USER_INPUT_TEXT.strip()
+    if not text:
+        return
+    if is_learning_active and learning_step == "ASKED_NAME":
+        if is_refusal_response(text):
+            learning_name = "__ANONYMOUS__"
+            USER_INPUT_TEXT = ""
+            print("[Frontend Auto-Learn] User typed refusal -> assigning anonymous profile.")
+            return
+        c_name = clean_extracted_name(text)
+        if c_name:
+            learning_name = c_name
+            USER_INPUT_TEXT = ""
+            print(f"[Frontend Auto-Learn] Name entered via input box: {c_name}")
+            return
+    send_command_to_backend(text)
+    USER_INPUT_TEXT = ""
+
+
 # -------------------- OPTICS / CAMERA VIEW MODULE --------------------
 def draw_camera_panel(surface, t):
-    global CAMERA_SURFACE, CAMERA_ENABLED
+    global CAMERA_SURFACE, CAMERA_ENABLED, CURRENT_FACE_LABEL, CURRENT_FACE_IS_OWNER, CURRENT_FACE_STATE, CURRENT_FACE_IDENTITY, face_system, is_learning_active
     panel_rect = LAYOUT["cam_panel"]
-    accent = (0, 200, 255)
 
-    badge = "REC ● LIVE" if CAMERA_ENABLED else "STANDBY"
+    owner_name = (face_system.owner_profile.get("name") if face_system and hasattr(face_system, "owner_profile") else "ROHIT").upper()
+
+    if not CAMERA_ENABLED:
+        accent = (140, 150, 170)
+        badge = "STANDBY"
+    elif is_learning_active:
+        accent = (255, 180, 60)
+        badge = "ENROLLING ● LIVE"
+    elif CURRENT_FACE_IS_OWNER:
+        accent = (0, 255, 120)
+        badge = f"{owner_name} VERIFIED ● LIVE"
+    elif CURRENT_FACE_STATE == FACE_STATE_GUEST_PRESENT:
+        accent = (0, 220, 255)
+        badge = f"{CURRENT_FACE_IDENTITY.upper()} ● LIVE"
+    elif CURRENT_FACE_STATE == FACE_STATE_UNKNOWN:
+        accent = (255, 60, 60)
+        badge = "UNKNOWN TARGET ● LIVE"
+    elif CURRENT_FACE_STATE == FACE_STATE_NO_FACE:
+        accent = (255, 100, 100)
+        badge = "NO TARGET ● LIVE"
+    else:
+        accent = (0, 200, 255)
+        badge = "SCANNING ● LIVE"
+
     draw_glass_panel(surface, panel_rect, "NEURA OPTICS // SCANNER", accent, badge)
 
     cam_inner_x = panel_rect.x + 8
@@ -840,24 +1045,24 @@ def draw_camera_panel(surface, t):
         scaled = pygame.transform.scale(CAMERA_SURFACE, (cam_inner_w, cam_inner_h))
         surface.blit(scaled, (cam_inner_x, cam_inner_y))
 
-        # Sci-Fi Viewfinder Overlay
-        # Scanlines
-        scan_step = 6
-        for sy in range(cam_inner_y, cam_inner_y + cam_inner_h, scan_step):
-            pygame.draw.line(surface, (10, 20, 45), (cam_inner_x, sy), (cam_inner_x + cam_inner_w, sy), 1)
-
-        # Center Reticle
-        cx, cy = inner_rect.centerx, inner_rect.centery
-        pygame.draw.circle(surface, (0, 220, 255), (cx, cy), 14, 1)
-        pygame.draw.line(surface, (0, 220, 255), (cx - 20, cy), (cx - 8, cy), 1)
-        pygame.draw.line(surface, (0, 220, 255), (cx + 8, cy), (cx + 20, cy), 1)
-        pygame.draw.line(surface, (0, 220, 255), (cx, cy - 20), (cx, cy - 8), 1)
-        pygame.draw.line(surface, (0, 220, 255), (cx, cy + 8), (cx, cy + 20), 1)
+        # Thin tech border
+        pygame.draw.rect(surface, accent, inner_rect, 1, border_radius=3)
 
         # Tech telemetry text
         font_tech = pygame.font.SysFont("consolas", 8, bold=True)
-        surface.blit(font_tech.render("FOV 84° // HD 1080P", True, (0, 220, 255)), (cam_inner_x + 6, cam_inner_y + 4))
-        surface.blit(font_tech.render("LOCK: TRACKING", True, (0, 220, 255)), (cam_inner_x + 6, cam_inner_y + cam_inner_h - 14))
+        surface.blit(font_tech.render("FOV 84° // BIOMETRIC HUD", True, accent), (cam_inner_x + 6, cam_inner_y + 4))
+
+        if CURRENT_FACE_IS_OWNER:
+            status_col = (0, 255, 120)
+        elif CURRENT_FACE_STATE == FACE_STATE_GUEST_PRESENT:
+            status_col = (0, 220, 255)
+        elif CURRENT_FACE_STATE == FACE_STATE_UNKNOWN:
+            status_col = (255, 80, 80)
+        elif CURRENT_FACE_STATE == FACE_STATE_NO_FACE:
+            status_col = (255, 100, 100)
+        else:
+            status_col = (0, 220, 255)
+        surface.blit(font_tech.render(f"STATUS: {CURRENT_FACE_LABEL}", True, status_col), (cam_inner_x + 6, cam_inner_y + cam_inner_h - 14))
     else:
         # Standby Animated Cyber Radar Display
         pygame.draw.rect(surface, (8, 14, 30), inner_rect, border_radius=4)
@@ -1271,7 +1476,7 @@ def main():
     except Exception as e:
         print("Audio device warning:", e)
 
-    # Camera Setup with OpenCV
+    # Camera Setup with OpenCV & Biometric Engine
     cam = None
     try:
         cam = cv2.VideoCapture(0)
@@ -1279,6 +1484,17 @@ def main():
         cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
     except Exception as e:
         print("Camera device warning:", e)
+
+    global face_system, mem_manager, CURRENT_FACE_STATE, CURRENT_FACE_LABEL, CURRENT_FACE_CONF, CURRENT_FACE_IS_OWNER, CURRENT_FACE_IDENTITY
+    global active_person_spoken, candidate_person, candidate_streak, no_face_start_time, last_speech_time, is_first_startup_greeting
+    global is_learning_active, learning_step, learning_name, learning_samples, learning_started_time, last_unknown_prompt_time, last_sample_cap_time
+
+    try:
+        face_system = get_face_system()
+        mem_manager = MemoryManager()
+        print("[Neura Frontend] Biometric Face Recognition engine active.")
+    except Exception as e:
+        print("[Neura Frontend] Vision init error:", e)
 
     rot_x = 0.0
     rot_y = 0.0
@@ -1299,13 +1515,256 @@ def main():
             # Update live assistant status from bridge
             update_assistant_status()
 
-            # Process Webcam
+            # Process Webcam & Biometric Face Tracking
             if CAMERA_ENABLED and cam is not None and cam.isOpened():
                 ret, frame = cam.read()
                 if ret:
-                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    frame = cv2.flip(frame, 1)
-                    CAMERA_SURFACE = pygame.surfarray.make_surface(frame.swapaxes(0, 1))
+                    if face_system is not None:
+                        # Full pipeline: YuNet (Detect) -> SFace (Embed) -> Compare Known Faces -> Identity HUD
+                        results, annotated = face_system.process_frame(
+                            frame,
+                            draw_overlay=True,
+                            mirror_display=True
+                        )
+
+                        # Prioritize faces: Owner (2) > Known Guest (1) > Unknown (0), largest area first
+                        def _face_priority(f):
+                            score = 2 if f.get("is_owner") else (1 if f.get("is_known") else 0)
+                            bb = f.get("bbox", [0, 0, 0, 0])
+                            area = bb[2] * bb[3] if len(bb) >= 4 else 0
+                            return (score, area)
+
+                        results = sorted(results, key=_face_priority, reverse=True)
+
+                        has_face = len(results) > 0
+                        top_face = results[0] if has_face else None
+
+                        # Check if any known face is visible in the camera frame
+                        has_known_in_frame = any(f.get("is_owner") or f.get("is_known") for f in results)
+
+                        is_rohit = has_face and top_face["is_owner"]
+                        is_known_guest = has_face and top_face.get("is_known", False) and not top_face["is_owner"]
+                        is_unknown = has_face and not top_face.get("is_known", False)
+                        face_conf = top_face["confidence"] if has_face else 0.0
+                        face_name = top_face.get("identity", "Unknown") if has_face else "Unknown"
+
+                        owner_name = face_system.owner_profile.get("name", "Rohit Kumar Adak") if face_system else "Rohit Kumar Adak"
+
+                        CURRENT_FACE_IS_OWNER = is_rohit
+                        CURRENT_FACE_CONF = face_conf
+                        CURRENT_FACE_IDENTITY = face_name if has_face else "None"
+
+                        now = time.time()
+
+                        # If a known face is in frame, cancel any active unknown learning sequence to greet known person instead
+                        if has_known_in_frame and is_learning_active:
+                            print(f"[Neura Vision] Known face in view ({face_name}) -> cancelling name prompt to greet known person.")
+                            is_learning_active = False
+                            learning_step = "IDLE"
+                            learning_name = None
+                            learning_samples = []
+                            try:
+                                if os.path.exists(AUTO_LEARN_BRIDGE_FILE):
+                                    os.remove(AUTO_LEARN_BRIDGE_FILE)
+                            except Exception:
+                                pass
+
+                        # --- AUTO-LEARNING WORKFLOW FOR UNKNOWN FACES (like setup_face.py) ---
+                        if is_learning_active:
+                            # 1. Waiting for user's name
+                            if learning_step == "ASKED_NAME":
+                                if os.path.exists(AUTO_LEARN_BRIDGE_FILE):
+                                    try:
+                                        with open(AUTO_LEARN_BRIDGE_FILE, "r", encoding="utf-8") as f:
+                                            bdata = json.load(f)
+                                        if bdata.get("acquired_name"):
+                                            learning_name = bdata["acquired_name"]
+                                    except Exception:
+                                        pass
+
+                                if learning_name:
+                                    if learning_name == "__ANONYMOUS__" or is_refusal_response(learning_name):
+                                        clean_name = get_next_anonymous_name(face_system)
+                                    else:
+                                        clean_name = learning_name.strip()
+                                    learning_name = clean_name
+                                    learning_step = "CAPTURING"
+                                    learning_samples = []
+                                    last_sample_cap_time = 0.0
+                                    if "Anonymous" in clean_name:
+                                        frontend_speak(f"Understood. Registering you as {clean_name}. Hold still, capturing your photos...")
+                                    else:
+                                        frontend_speak(f"Hold still, {clean_name}, capturing your photos...")
+                                    CURRENT_FACE_LABEL = f"CAPTURING FOR {clean_name.upper()}..."
+                                elif now - learning_started_time > 14.0:
+                                    print("[Frontend Auto-Learn] Timed out waiting for name.")
+                                    is_learning_active = False
+                                    learning_step = "IDLE"
+                                    learning_name = None
+                                    last_unknown_prompt_time = now
+                                    try:
+                                        if os.path.exists(AUTO_LEARN_BRIDGE_FILE):
+                                            os.remove(AUTO_LEARN_BRIDGE_FILE)
+                                    except Exception:
+                                        pass
+                                else:
+                                    CURRENT_FACE_LABEL = "NEW PERSON DETECTED: PLEASE TELL ME YOUR NAME..."
+
+                            # 2. Capturing face photo samples
+                            elif learning_step == "CAPTURING":
+                                clean_name = learning_name
+                                if now - last_sample_cap_time >= 0.25:
+                                    faces = face_system.detect_faces(frame)
+                                    if faces:
+                                        best_face = max(faces, key=lambda f: f["bbox"][2] * f["bbox"][3])
+                                        emb = face_system.extract_embedding(frame, best_face["raw_face"])
+                                        learning_samples.append(emb)
+                                        last_sample_cap_time = now
+
+                                        # Save snapshot image on first sample
+                                        if len(learning_samples) == 1:
+                                            try:
+                                                os.makedirs("images", exist_ok=True)
+                                                img_path = os.path.join("images", f"{clean_name}.jpg")
+                                                cv2.imwrite(img_path, frame)
+                                                print(f"[Neura Vision] Saved photo for {clean_name} to {img_path}")
+                                            except Exception as err:
+                                                print(f"[Neura Vision] Error saving photo: {err}")
+
+                                CURRENT_FACE_LABEL = f"CAPTURING FOR {clean_name.upper()}: {len(learning_samples)}/{TARGET_AUTO_SAMPLES}"
+
+                                if len(learning_samples) >= TARGET_AUTO_SAMPLES:
+                                    learning_step = "ENROLLING"
+                                    face_system.enroll_person(clean_name, learning_samples, role="guest")
+                                    face_system.load_known_faces()
+
+                                    if mem_manager:
+                                        mem_manager.user_memory["user_facts"]["presence"] = f"guest_{clean_name}_present"
+                                        mem_manager.log_activity(f"Face auto-enrolled: {clean_name} added to known faces.")
+                                        mem_manager.save_user_memory()
+
+                                    try:
+                                        if os.path.exists(AUTO_LEARN_BRIDGE_FILE):
+                                            os.remove(AUTO_LEARN_BRIDGE_FILE)
+                                    except Exception:
+                                        pass
+
+                                    if "Anonymous" in clean_name:
+                                        confirm_msg = f"You have been registered as {clean_name}. I will recognize you next time."
+                                    else:
+                                        confirm_msg = f"Thank you, {clean_name}! I have saved your face and will remember you."
+                                    frontend_speak(confirm_msg)
+
+                                    active_person_spoken = clean_name
+                                    CURRENT_FACE_STATE = FACE_STATE_GUEST_PRESENT
+                                    CURRENT_FACE_IDENTITY = clean_name
+                                    is_learning_active = False
+                                    learning_step = "IDLE"
+                                    learning_name = None
+                                    learning_samples = []
+
+                        # --- NORMAL TRACKING & RECOGNITION (When not in active auto-learning) ---
+                        elif has_face:
+                            no_face_start_time = 0.0
+
+                            if is_rohit:
+                                CURRENT_FACE_LABEL = f"{owner_name.upper()} (OWNER) [{int(face_conf * 100)}%]"
+                                current_cand = owner_name
+                            elif is_known_guest:
+                                CURRENT_FACE_LABEL = f"{face_name.upper()} [{int(face_conf * 100)}%]"
+                                current_cand = face_name
+                            else:
+                                CURRENT_FACE_LABEL = f"UNKNOWN [{int(face_conf * 100)}%]"
+                                current_cand = "UNKNOWN"
+
+                            if current_cand == candidate_person:
+                                candidate_streak += 1
+                            else:
+                                candidate_person = current_cand
+                                candidate_streak = 1
+
+                            # Require 2 consecutive frames for stable identification
+                            if candidate_streak >= 2:
+                                if is_rohit:
+                                    if current_cand != active_person_spoken and (now - last_speech_time) >= 1.5:
+                                        active_person_spoken = current_cand
+                                        last_speech_time = now
+                                        CURRENT_FACE_STATE = FACE_STATE_OWNER_PRESENT
+                                        if is_first_startup_greeting:
+                                            frontend_speak(f"Hello Sir, identity verified! Welcome back, {owner_name}.")
+                                            is_first_startup_greeting = False
+                                        else:
+                                            frontend_speak("Welcome back, Sir! It's good to see you.")
+                                        if mem_manager:
+                                            mem_manager.user_memory["user_facts"]["presence"] = "present"
+                                            mem_manager.user_memory["user_facts"]["face_authenticated"] = True
+                                            mem_manager.user_memory["user_facts"]["name"] = owner_name
+                                            mem_manager.log_activity(f"Visual auth: {owner_name} verified")
+                                            mem_manager.save_user_memory()
+
+                                elif is_known_guest:
+                                    if current_cand != active_person_spoken and (now - last_speech_time) >= 1.5:
+                                        active_person_spoken = current_cand
+                                        last_speech_time = now
+                                        CURRENT_FACE_STATE = FACE_STATE_GUEST_PRESENT
+                                        frontend_speak(f"Hello {face_name}, welcome!")
+                                        if mem_manager:
+                                            mem_manager.user_memory["user_facts"]["presence"] = f"guest_{face_name}_present"
+                                            mem_manager.log_activity(f"Visual recognition: {face_name} present")
+                                            mem_manager.save_user_memory()
+
+                                else:
+                                    # UNKNOWN FACE: Trigger auto-learning like setup_face.py!
+                                    # BUT ONLY IF THERE IS NO KNOWN FACE IN FRAME!
+                                    if not has_known_in_frame:
+                                        CURRENT_FACE_STATE = FACE_STATE_UNKNOWN
+                                        if (now - last_unknown_prompt_time) >= UNKNOWN_PROMPT_COOLDOWN:
+                                            is_learning_active = True
+                                            learning_step = "ASKED_NAME"
+                                            learning_name = None
+                                            learning_samples = []
+                                            learning_started_time = now
+                                            last_unknown_prompt_time = now
+                                            last_speech_time = now
+
+                                            # Signal backend via bridge
+                                            try:
+                                                with open(AUTO_LEARN_BRIDGE_FILE, "w", encoding="utf-8") as f:
+                                                    json.dump({"active": True, "timestamp": now, "acquired_name": None}, f)
+                                            except Exception:
+                                                pass
+
+                                            frontend_speak("Hello! Can you tell me your name?")
+                                            trigger_voice_name_listener()
+                                            if mem_manager:
+                                                mem_manager.user_memory["user_facts"]["presence"] = "unknown_person_present"
+                                                mem_manager.log_activity("Visual alert: Unknown face detected - auto-learning initiated")
+                                                mem_manager.save_user_memory()
+
+                        else:
+                            CURRENT_FACE_LABEL = "NO FACE DETECTED"
+                            candidate_person = None
+                            candidate_streak = 0
+                            if no_face_start_time == 0.0:
+                                no_face_start_time = now
+                            elif (now - no_face_start_time) >= 1.5:
+                                if active_person_spoken != "NO_FACE":
+                                    CURRENT_FACE_STATE = FACE_STATE_NO_FACE
+                                    active_person_spoken = "NO_FACE"
+                                    last_speech_time = now
+                                    frontend_speak("No face is detected.")
+                                    if mem_manager:
+                                        mem_manager.user_memory["user_facts"]["presence"] = "absent"
+                                        mem_manager.user_memory["user_facts"]["face_authenticated"] = False
+                                        mem_manager.log_activity("Camera alert: No face detected")
+                                        mem_manager.save_user_memory()
+
+                        frame_rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
+                        CAMERA_SURFACE = pygame.surfarray.make_surface(frame_rgb.swapaxes(0, 1))
+                    else:
+                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        frame_rgb = cv2.flip(frame_rgb, 1)
+                        CAMERA_SURFACE = pygame.surfarray.make_surface(frame_rgb.swapaxes(0, 1))
                 else:
                     CAMERA_SURFACE = None
             else:
@@ -1347,9 +1806,7 @@ def main():
                     # 3. Input Box Focus & Send Button
                     send_btn = get_send_button_rect()
                     if send_btn.collidepoint(mpos):
-                        if USER_INPUT_TEXT.strip():
-                            send_command_to_backend(USER_INPUT_TEXT)
-                            USER_INPUT_TEXT = ""
+                        handle_user_input_submission()
                     elif LAYOUT["input_box"].collidepoint(mpos):
                         INPUT_ACTIVE = True
                     else:
@@ -1365,9 +1822,7 @@ def main():
                 elif event.type == pygame.KEYDOWN:
                     if INPUT_ACTIVE:
                         if event.key == pygame.K_RETURN:
-                            if USER_INPUT_TEXT.strip():
-                                send_command_to_backend(USER_INPUT_TEXT)
-                                USER_INPUT_TEXT = ""
+                            handle_user_input_submission()
                         elif event.key == pygame.K_BACKSPACE:
                             USER_INPUT_TEXT = USER_INPUT_TEXT[:-1]
                         elif event.key == pygame.K_ESCAPE:
