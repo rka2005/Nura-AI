@@ -126,7 +126,14 @@ Rohit Kumar Adak       Enrolled Name / Anon             â–¼                   â–
 - **Feature Extractor**: OpenCV Zoo SFace (Output: 128-D float vector, L2 normalized).
 - **Metric Comparison**: Cosine Distance = $1.0 - \text{CosineSimilarity}(\vec{e}_1, \vec{e}_2)$. Matches are classified when distance $\le 0.363$.
 - **Known-Face Priority Ranking**:
-  $$\text{Priority} = \begin{cases} 2 & \text{if Owner} \\ 1 & \text{if Enrolled Guest} \\ 0 & \text{if Unknown} \end{cases}$$
+  $$
+  \text{Priority} =
+  \begin{cases}
+  2 & \text{if Owner} \\
+  1 & \text{if Enrolled Guest} \\
+  0 & \text{if Unknown}
+  \end{cases}
+  $$
   Tiebreaker: Bounding box area ($w \times h$).
 
 ---
