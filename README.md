@@ -125,7 +125,8 @@ Rohit Kumar Adak       Enrolled Name / Anon             ▼                   �
 - **Detection Algorithm**: OpenCV Zoo YuNet (Input resolution dynamically scaled, score threshold: `0.70`, NMS threshold: `0.30`).
 - **Feature Extractor**: OpenCV Zoo SFace (Output: 128-D float vector, L2 normalized).
 - **Metric Comparison**: Cosine Distance = $1.0 - \text{CosineSimilarity}(\vec{e}_1, \vec{e}_2)$. Matches are classified when distance $\le 0.363$.
-- **Known-Face Priority Ranking**:
+- **Known-Face Priority Ranking:**
+
   $$
   \text{Priority} =
   \begin{cases}
@@ -134,8 +135,8 @@ Rohit Kumar Adak       Enrolled Name / Anon             ▼                   �
   0 & \text{if Unknown}
   \end{cases}
   $$
-  Tiebreaker: Bounding box area ($w \times h$).
 
+  **Tiebreaker:** Bounding box area $(w \times h)$.
 ---
 
 ## 🖥️ Screen Vision & Desktop Automation Subsystem
