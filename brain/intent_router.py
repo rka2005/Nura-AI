@@ -17,7 +17,14 @@ class IntentType:
     SYSTEM_NOTES = "SYSTEM_NOTES"
     SYSTEM_REMINDER = "SYSTEM_REMINDER"
     SYSTEM_MEDIA = "SYSTEM_MEDIA"
+    SYSTEM_YOUTUBE_PLAY = "SYSTEM_YOUTUBE_PLAY"
+    SYSTEM_YOUTUBE_SEARCH = "SYSTEM_YOUTUBE_SEARCH"
+    SYSTEM_NETWORK_SPEED = "SYSTEM_NETWORK_SPEED"
+    SYSTEM_CONDITION = "SYSTEM_CONDITION"
+    SYSTEM_FOLDER_OPEN = "SYSTEM_FOLDER_OPEN"
+    SYSTEM_FILE_OPEN = "SYSTEM_FILE_OPEN"
     SYSTEM_JOKE = "SYSTEM_JOKE"
+    SYSTEM_PERMISSION = "SYSTEM_PERMISSION"
     
     MEMORY_CLEAR = "MEMORY_CLEAR"
     MEMORY_INSPECT = "MEMORY_INSPECT"
@@ -35,6 +42,16 @@ class IntentType:
     DESKTOP_HOTKEY = "DESKTOP_HOTKEY"
     DESKTOP_FIRST_LINK = "DESKTOP_FIRST_LINK"
     DESKTOP_SCREENSHOT = "DESKTOP_SCREENSHOT"
+
+    # Screen Vision
+    SCREEN_DESCRIBE = "SCREEN_DESCRIBE"
+    SCREEN_CLICK = "SCREEN_CLICK"
+    SCREEN_OPEN = "SCREEN_OPEN"
+    SCREEN_PLAY = "SCREEN_PLAY"
+    SCREEN_SCROLL = "SCREEN_SCROLL"
+    SCREEN_TYPE = "SCREEN_TYPE"
+    SCREEN_SEARCH = "SCREEN_SEARCH"
+    SCREEN_INTERACT = "SCREEN_INTERACT"
 
     # File CRUD Operations
     FILE_CREATE = "FILE_CREATE"
@@ -73,6 +90,17 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
     if any(phrase in q for phrase in ['clear memory', 'reset memory', 'wipe memory', 'forget everything']):
         return IntentType.MEMORY_CLEAR, {}
 
+    # Screen and Background Work Permissions
+    if any(p in q for p in [
+        'screen permission', 'screen access', 'background permission', 'background work permission',
+        'background work', 'take screen permission', 'take the screen permission',
+        'allow screen access', 'grant screen access', 'allow screen permission', 'grant screen permission',
+        'take background permission', 'take background work permission', 'grant background permission',
+        'grant background work permission', 'allow background work', 'enable background work'
+    ]):
+        action = "revoke" if any(w in q for w in ['stop', 'disable', 'revoke', 'deny']) else "grant"
+        return IntentType.SYSTEM_PERMISSION, {"action": action}
+
     if any(phrase in q for phrase in ['what do you know about me', 'show my memory', 'what are my preferences', 'my profile']):
         return IntentType.MEMORY_INSPECT, {}
 
@@ -80,20 +108,153 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
     if any(phrase in q for phrase in ['clear conversation', 'reset conversation', 'clear chat', 'new chat']):
         return IntentType.MEMORY_RESET_CONVERSATION, {}
 
+    # Local diagnostics
+    if any(phrase in q for phrase in [
+        'network speed', 'internet speed', 'internet connection speed',
+        'wifi speed', 'wi-fi speed', 'check my internet', 'check the internet',
+        'how fast is my internet', 'download speed', 'upload speed',
+        'check my network', 'network performance', 'internet performance',
+    ]):
+        return IntentType.SYSTEM_NETWORK_SPEED, {}
+
+    if any(phrase in q for phrase in [
+        'system condition', 'system status', 'computer condition',
+        'computer status', 'pc condition', 'pc status', 'system health',
+        'cpu usage', 'ram usage', 'memory usage', 'disk usage',
+        'how is my system', 'how is my computer',
+    ]):
+        return IntentType.SYSTEM_CONDITION, {}
+    if any(term in q for term in ['cpu', 'ram', 'processor']) and any(
+        term in q for term in ['usage', 'status', 'condition', 'health', 'how', 'check', 'tell']
+    ):
+        return IntentType.SYSTEM_CONDITION, {}
+
     # Desktop Automation - Screenshot
     if any(s in q for s in ['take a screenshot', 'take screenshot', 'capture screen', 'screenshot']):
         return IntentType.DESKTOP_SCREENSHOT, {}
 
-    # Desktop Automation - Open First Link / Search Result
-    if any(f in q for f in ['open the first link', 'click the first link', 'open first link', 'click first link', 'first link', 'first video', 'play the first video', 'first result']):
-        return IntentType.DESKTOP_FIRST_LINK, {}
+    # ==========================================
+    # Screen Vision Intents
+    # ==========================================
 
-    # Desktop Automation - Search In Active Tab (e.g. YouTube tab, browser tab, or active app)
+    # 1. Screen Describe / Content Awareness
+    if any(phrase in q for phrase in [
+        'what is currently open on my screen', 'what is open on my screen', "what's open on my screen",
+        'what is on my screen', "what's on my screen", 'what is on screen', "what's on screen",
+        'what is this page about', "what's this page about", 'what is on this page', "what's on this page",
+        'describe my screen', 'describe the screen', 'read my screen', 'read the screen',
+        'what do you see on my screen', 'what can you see on my screen', 'scan screen and describe',
+        'summarize this page', 'summarize current screen'
+    ]):
+        return IntentType.SCREEN_DESCRIBE, {}
+
+    # 2. Compound Scroll & Action: e.g. "scroll down and open the third result"
+    scroll_compound = re.search(r"scroll\s+(down|up|bottom|top)\s+(?:and\s+)?(?:then\s+)?(open|click|play)\s+(?:the\s+)?(.+)", q, re.IGNORECASE)
+    if scroll_compound:
+        return IntentType.SCREEN_SCROLL, {
+            "direction": scroll_compound.group(1).lower(),
+            "then_action": scroll_compound.group(2).lower(),
+            "then_target": scroll_compound.group(3).strip()
+        }
+
+    # 3. Screen Typing: e.g. "type Python into search box"
+    screen_type_match = re.search(r"^(?:please\s+)?type\s+(.+?)\s+(?:in|into|on)\s+(?:the\s+)?(.+)$", q, re.IGNORECASE)
+    if screen_type_match and any(fld in screen_type_match.group(2).lower() for fld in ["box", "field", "input", "bar", "text", "search"]):
+        return IntentType.SCREEN_TYPE, {
+            "text": screen_type_match.group(1).strip(),
+            "target": screen_type_match.group(2).strip()
+        }
+
+    # 4. Screen Play: e.g. "play the second song", "play the third video"
+    screen_play_match = re.match(
+        r"^(?:please\s+)?play\s+(?:the\s+)?(first|1st|second|2nd|third|3rd|fourth|4th|fifth|5th|sixth|6th|seventh|7th|eighth|8th|ninth|9th|tenth|10th|\d+)\s*(video|song|track|item|card|one)$",
+        q,
+        re.IGNORECASE
+    )
+    if screen_play_match:
+        ord_val = screen_play_match.group(1).strip()
+        item_kind = screen_play_match.group(2).strip()
+        return IntentType.SCREEN_PLAY, {"target": f"{ord_val} {item_kind}"}
+
+    # 5. Screen Open: e.g. "open the second Google search result", "open the link about Python", "open images tab", "open search bar"
+    screen_open_patterns = [
+        # "open the link about Python", "open link about Python"
+        r"^(?:please\s+)?open\s+(?:the\s+)?link\s+about\s+(.+)$",
+        # "open the second Google search result", "open the third search result"
+        r"^(?:please\s+)?open\s+(?:the\s+)?(first|1st|second|2nd|third|3rd|fourth|4th|fifth|5th|sixth|6th|seventh|7th|eighth|8th|ninth|9th|tenth|10th|\d+)?\s*(?:google\s+)?search\s+result$",
+        # "open the second link", "open the third result"
+        r"^(?:please\s+)?open\s+(?:the\s+)?(first|1st|second|2nd|third|3rd|fourth|4th|fifth|5th|sixth|6th|seventh|7th|eighth|8th|ninth|9th|tenth|10th|\d+)\s+(result|link|video|song|item)$",
+        # "open images tab", "open short videos tab", "open search bar", "open link description"
+        r"^(?:please\s+)?open\s+(?:the\s+)?(.+?\s+tab|tab\s+.+|search\s+bar|search\s+box|link\s+description|description)$",
+        # "open the Python link"
+        r"^(?:please\s+)?open\s+(?:the\s+)?(.+?)\s+link$"
+    ]
+    for sop in screen_open_patterns:
+        m = re.match(sop, q, re.IGNORECASE)
+        if m:
+            clean_tgt = re.sub(r"^(?:please\s+)?open\s+(?:the\s+)?", "", q, flags=re.IGNORECASE).strip()
+            return IntentType.SCREEN_OPEN, {"target": clean_tgt}
+
+    # Tab navigation / switching on screen: "switch to images tab", "go to videos tab", "select ai mode tab"
+    tab_nav_match = re.match(r"^(?:please\s+)?(?:go\s+to|switch\s+to|select)\s+(?:the\s+)?(.+?\s+tab|search\s+bar|search\s+box)$", q, re.IGNORECASE)
+    if tab_nav_match:
+        return IntentType.SCREEN_CLICK, {"target": tab_nav_match.group(1).strip()}
+
+    # Search bar focus / click: "focus search bar", "select search bar", "focus the search bar"
+    if any(q.startswith(p) for p in ["focus search bar", "select search bar", "focus the search bar", "select the search bar"]):
+        return IntentType.SCREEN_CLICK, {"target": "search bar"}
+
+    # 6. Screen Click: e.g. "click the third video", "click the second result", "click button called Submit"
+    screen_click_match = re.match(r"^(?:please\s+)?click\s+(?:on\s+)?(?:the\s+)?(.+)$", q, re.IGNORECASE)
+    if screen_click_match:
+        tgt = screen_click_match.group(1).strip()
+        return IntentType.SCREEN_CLICK, {"target": tgt}
+
+    # 7. Screen Scroll: "scroll down", "scroll up"
+    if q in ["scroll down", "scroll up", "scroll screen down", "scroll screen up", "page down", "page up"]:
+        direction = "down" if "down" in q else "up"
+        return IntentType.SCREEN_SCROLL, {"direction": direction}
+
+    # Desktop Automation - Open / Play Nth Link, Song, Video, or Result on Active Screen (1st, 2nd, 3rd, 4th, etc.)
+    ordinal_map = {
+        'first': 1, '1st': 1, 'top': 1, 'one': 1, '1': 1,
+        'second': 2, '2nd': 2, 'two': 2, '2': 2,
+        'third': 3, '3rd': 3, 'three': 3, '3': 3,
+        'fourth': 4, '4th': 4, 'four': 4, '4': 4,
+        'fifth': 5, '5th': 5, 'five': 5, '5': 5,
+        'sixth': 6, '6th': 6, 'six': 6, '6': 6,
+        'seventh': 7, '7th': 7, 'seven': 7, '7': 7,
+        'eighth': 8, '8th': 8, 'eight': 8, '8': 8,
+        'ninth': 9, '9th': 9, 'nine': 9, '9': 9,
+        'tenth': 10, '10th': 10, 'ten': 10, '10': 10
+    }
+    ord_words = 'first|1st|second|2nd|third|3rd|fourth|4th|fifth|5th|sixth|6th|seventh|7th|eighth|8th|ninth|9th|tenth|10th|top|one|two|three|four|five|six|seven|eight|nine|ten'
+
+    nth_item_patterns = [
+        rf"^(?:please\s+)?(?:play|open|click|select|choose|start)\s+(?:the\s+)?({ord_words}|\d+(?:st|nd|rd|th)?)\s*(?:one|song|video|link|result|track|item)?$",
+        rf"^(?:please\s+)?(?:play|open|click|select|choose|start)\s+(?:song|video|link|result|track|item|number|no\.?)\s*(?:#|no\.?)?\s*(\d+|{ord_words})$",
+        rf"^(?:the\s+)?({ord_words}|\d+(?:st|nd|rd|th)?)\s+(?:one|song|video|link|result|track|item)$",
+        rf"^(?:the\s+)?(second|2nd|third|3rd|fourth|4th|fifth|5th|sixth|6th|seventh|7th|eighth|8th|ninth|9th|tenth|10th)$"
+    ]
+
+    for pat in nth_item_patterns:
+        nth_match = re.match(pat, q, re.IGNORECASE)
+        if nth_match:
+            tok = nth_match.group(1).lower()
+            idx = ordinal_map.get(tok)
+            if idx is None:
+                num = re.search(r'\d+', tok)
+                if num:
+                    idx = int(num.group(0))
+            if idx:
+                return IntentType.DESKTOP_FIRST_LINK, {"index": idx}
+
+
+    # Desktop Automation - Search In Active Tab (e.g. browser tab or active app)
     in_tab_patterns = [
-        r"(?:search on youtube|search in youtube|search youtube for|search youtube)\s+(?:for\s+)?(.+)",
         r"(?:search on this tab|search in this tab|search on their|search on there|search here)\s+(?:for\s+)?(.+)",
         r"(?:search this tab for|search tab for)\s+(.+)",
-        r"search\s+(.+?)\s+(?:on youtube|in youtube|on this tab|in this tab|on there|on their|here)$",
+        r"search\s+(.+?)\s+(?:on this tab|in this tab|on there|on their|here)$",
     ]
     for pattern in in_tab_patterns:
         match = re.search(pattern, q)
@@ -152,7 +313,11 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
 
     # 2. Read File
     read_file_match = re.search(r"(?:read file|show file|open file|view file|what is in file)\s+([a-zA-Z0-9_\-\.\s/\\]+)", query, re.IGNORECASE)
-    if read_file_match and not any(w in q for w in ["note", "camera", "app"]):
+    if (
+        read_file_match
+        and not q.startswith("open file ")
+        and not any(w in q for w in ["note", "camera", "app"])
+    ):
         return IntentType.FILE_READ, {"path": read_file_match.group(1).strip()}
 
     # 3. Update / Append File
@@ -214,6 +379,81 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
     if any(c in q for c in ['camera', 'open camera', 'webcam', 'take photo']):
         return IntentType.SYSTEM_CAMERA, {}
 
+    folder_open_match = re.match(
+        r"^(?:please\s+)?open\s+(?:this\s+)?(.+?)\s+folder\s+"
+        r"(?:from|in|on)\s+(?:my\s+)?(desktop|downloads|documents|music|pictures)$",
+        q,
+        re.IGNORECASE,
+    )
+    if folder_open_match:
+        return IntentType.SYSTEM_FOLDER_OPEN, {
+            "folder": folder_open_match.group(1).strip(),
+            "location": folder_open_match.group(2).strip(),
+        }
+
+    file_open_match = re.match(
+        r"^(?:please\s+)?open\s+(?:this\s+)?(?:file\s+)?(.+?)"
+        r"(?:\s+(?:from|in|on)\s+(?:my\s+)?"
+        r"(desktop|downloads|documents|music|pictures))?$",
+        q,
+        re.IGNORECASE,
+    )
+    if file_open_match:
+        target = file_open_match.group(1).strip()
+        location = file_open_match.group(2)
+        known_file_extension = bool(re.search(
+            r"\.(?:pdf|docx?|xlsx?|pptx?|txt|csv|rtf|odt|ods|zip|rar|png|jpe?g|gif)$",
+            target,
+            re.IGNORECASE,
+        ))
+        known_file_description = bool(re.search(
+            r"\b(?:pdf|word|excel|spreadsheet|powerpoint|text|csv|image|"
+            r"document|file|sheet)\s*(?:file|document|sheet|file)?\b",
+            target,
+            re.IGNORECASE,
+        ))
+        if location or known_file_extension or known_file_description or q.startswith("open file "):
+            return IntentType.SYSTEM_FILE_OPEN, {
+                "file": target,
+                "location": location,
+            }
+
+    # Compound YouTube Search command: "open youtube and search for...", "search ... on youtube", etc.
+    youtube_search_patterns = [
+        r"^(?:please\s+)?open\s+(?:up\s+)?youtube(?:\s+(?:and|then)\s+)?(?:search\s+(?:for\s+)?|find\s+)(.+)$",
+        r"^(?:please\s+)?(?:search\s+(?:for\s+)?|find\s+)(.+?)\s+(?:on\s+youtube|in\s+youtube)$",
+        r"^(?:please\s+)?(?:search\s+(?:on\s+|in\s+)?youtube\s+(?:for\s+)?)(.+)$",
+    ]
+    for pattern in youtube_search_patterns:
+        yt_search_match = re.match(pattern, q, re.IGNORECASE)
+        if yt_search_match:
+            search_target = yt_search_match.group(1).strip()
+            search_target = re.sub(r"^for\s+", "", search_target, flags=re.IGNORECASE).strip()
+            if search_target:
+                return IntentType.SYSTEM_YOUTUBE_SEARCH, {"query": search_target}
+
+    # Compound YouTube Play command: opening the site is part of the play request
+    youtube_play_match = re.match(
+        r"^(?:please\s+)?open\s+(?:up\s+)?youtube(?:\s+(?:and|then)\s+)?"
+        r"(?:play\s+(?:a\s+|the\s+)?|playa\s+)(.+)$",
+        q,
+        re.IGNORECASE,
+    )
+    if youtube_play_match:
+        song = youtube_play_match.group(1).strip()
+        if song:
+            return IntentType.SYSTEM_YOUTUBE_PLAY, {"song": song}
+
+    play_on_yt_match = re.match(
+        r"^(?:please\s+)?play\s+(.+?)\s+(?:on\s+youtube|in\s+youtube)$",
+        q,
+        re.IGNORECASE,
+    )
+    if play_on_yt_match:
+        song = play_on_yt_match.group(1).strip()
+        if song:
+            return IntentType.SYSTEM_YOUTUBE_PLAY, {"song": song}
+
     # Application management
     if 'close outlook' in q or 'close mail' in q:
         return IntentType.SYSTEM_APP_CLOSE, {"app_name": "outlook"}
@@ -226,6 +466,19 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
         # Ensure it's not "open camera" (already handled above)
         if app_target != "camera":
             return IntentType.SYSTEM_APP_OPEN, {"app_name": app_target}
+
+    # A requested song is a YouTube playback request, not a conversation.
+    song_play_match = re.match(
+        r"^(?:please\s+)?(?:play\s+(?:a\s+|an\s+|the\s+)?|playa\s+)(.+)$",
+        q,
+        re.IGNORECASE,
+    )
+    if song_play_match:
+        song = song_play_match.group(1).strip()
+        if song and song not in {"song", "music"} and any(
+            word in song for word in ["song", "music", "track"]
+        ):
+            return IntentType.SYSTEM_YOUTUBE_PLAY, {"song": song}
 
     # Notes
     if any(n in q for n in ['take a note', 'write a note', 'make a note', 'save a note']):

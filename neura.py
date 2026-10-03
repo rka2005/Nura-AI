@@ -22,6 +22,7 @@ import pyautogui
 import requests
 import json
 import pyjokes
+import psutil
 from art import text2art
 
 from memory.memory_manager import MemoryManager
@@ -50,7 +51,8 @@ memory_mgr = MemoryManager()
 memory = memory_mgr.user_memory  # Reference for backward compatibility
 
 # Desktop Automation & File CRUD Controllers
-SCREEN_ACCESS_ALLOWED = True
+SCREEN_ACCESS_ALLOWED = memory_mgr.get_preference("screen_access_allowed", True)
+BACKGROUND_WORK_ALLOWED = memory_mgr.get_preference("background_work_allowed", True)
 desktop_ctrl = DesktopController()
 file_mgr = FileManager()
 
@@ -221,30 +223,66 @@ def execute_desktop_or_file_intent(intent, metadata, raw_query: str = ""):
     Executes screen, desktop, or file CRUD actions deterministically without API calls.
     Returns (handled: bool, response_message: str).
     """
-    global SCREEN_ACCESS_ALLOWED
+    global SCREEN_ACCESS_ALLOWED, BACKGROUND_WORK_ALLOWED
 
     rq = raw_query.lower()
-    if any(p in rq for p in ["allow screen access", "grant screen access", "enable screen access"]):
+
+    # Handle explicit permission requests
+    if intent == IntentType.SYSTEM_PERMISSION or any(p in rq for p in [
+        "allow screen access", "grant screen access", "enable screen access",
+        "take screen permission", "take the screen permission", "screen permission",
+        "allow screen permission", "grant screen permission", "enable screen permission",
+        "take background permission", "take the background permission", "take background work permission",
+        "grant background permission", "grant background work permission",
+        "allow background work", "enable background work", "background permission", "background work permission"
+    ]):
+        action = metadata.get("action", "grant")
+        if action == "revoke" or any(p in rq for p in ["stop screen access", "disable screen access", "revoke screen access", "revoke background", "disable background"]):
+            SCREEN_ACCESS_ALLOWED = False
+            BACKGROUND_WORK_ALLOWED = False
+            try:
+                update_preference("screen_access_allowed", False)
+                update_preference("background_work_allowed", False)
+            except Exception:
+                pass
+            return True, "Screen access and background work permissions have been revoked, Sir."
+        else:
+            SCREEN_ACCESS_ALLOWED = True
+            BACKGROUND_WORK_ALLOWED = True
+            try:
+                update_preference("screen_access_allowed", True)
+                update_preference("background_work_allowed", True)
+            except Exception:
+                pass
+            return True, "Screen access and background work permissions have been granted, Sir."
+
+    # Automatically ensure screen access and background execution are active
+    if not SCREEN_ACCESS_ALLOWED:
         SCREEN_ACCESS_ALLOWED = True
-        return True, "Screen access permission has been granted, Sir."
-
-    if any(p in rq for p in ["stop screen access", "disable screen access", "revoke screen access"]):
-        SCREEN_ACCESS_ALLOWED = False
-        return True, "Screen access permission has been revoked, Sir."
-
-    if not SCREEN_ACCESS_ALLOWED and intent in [
-        IntentType.DESKTOP_SEARCH_IN_TAB, IntentType.DESKTOP_FIRST_LINK, 
-        IntentType.DESKTOP_TYPE, IntentType.DESKTOP_HOTKEY, IntentType.DESKTOP_SCREENSHOT
-    ]:
-        return True, "Screen access is currently disabled. Say 'allow screen access' to enable it."
+        try:
+            update_preference("screen_access_allowed", True)
+            update_preference("background_work_allowed", True)
+        except Exception:
+            pass
 
     if intent == IntentType.DESKTOP_SEARCH_IN_TAB:
         q = metadata.get("query", "")
         res = desktop_ctrl.search_in_active_window(q)
         return True, res
 
+    elif intent == IntentType.SYSTEM_FOLDER_OPEN:
+        folder_name = metadata.get("folder", "")
+        location = metadata.get("location", "")
+        return True, open_folder_from_location(folder_name, location)
+
+    elif intent == IntentType.SYSTEM_FILE_OPEN:
+        file_name = metadata.get("file", "")
+        location = metadata.get("location")
+        return True, open_file_from_system(file_name, location)
+
     elif intent == IntentType.DESKTOP_FIRST_LINK:
-        res = desktop_ctrl.open_first_search_result()
+        idx = metadata.get("index", 1)
+        success, res = desktop_ctrl.click_link(idx)
         return True, res
 
     elif intent == IntentType.DESKTOP_TYPE:
@@ -300,6 +338,107 @@ def execute_desktop_or_file_intent(intent, metadata, raw_query: str = ""):
 
     return False, ""
 
+def execute_screen_vision_intent(intent, metadata, raw_query: str = ""):
+    """
+    Executes Screen Vision capabilities:
+    - SCREEN_DESCRIBE: Screen content inspection and verbal summary
+    - SCREEN_CLICK: Dynamic element targeting and click action
+    - SCREEN_OPEN: Dynamic link, result, or video opening
+    - SCREEN_PLAY: Dynamic song/video playback from screen
+    - SCREEN_SCROLL: Scroll viewport or compound scroll and open
+    - SCREEN_TYPE: Typing into detected on-screen fields
+    Returns (handled: bool, response_message: str).
+    """
+    if intent == IntentType.SCREEN_DESCRIBE:
+        summary = desktop_ctrl.screen_describe()
+        return True, summary
+
+    elif intent == IntentType.SCREEN_CLICK:
+        target = metadata.get("target", "")
+        if "link" in target.lower():
+            success, msg = desktop_ctrl.click_link(target)
+        else:
+            success, msg = desktop_ctrl.screen_click_target(target)
+        return True, msg
+
+    elif intent == IntentType.SCREEN_OPEN:
+        target = metadata.get("target", "")
+        if "link" in target.lower():
+            success, msg = desktop_ctrl.click_link(target)
+        else:
+            success, msg = desktop_ctrl.screen_open_target(target)
+        return True, msg
+
+    elif intent == IntentType.SCREEN_PLAY:
+        target = metadata.get("target", "")
+        success, msg = desktop_ctrl.screen_open_target(target)
+        return True, msg
+
+    elif intent == IntentType.SCREEN_SCROLL:
+        direction = metadata.get("direction", "down")
+        desktop_ctrl.screen_scroll(direction)
+        then_act = metadata.get("then_action")
+        then_tgt = metadata.get("then_target")
+        if then_act and then_tgt:
+            time.sleep(0.4)
+            success, msg = desktop_ctrl.screen_open_target(then_tgt)
+            return True, f"Scrolled {direction}. {msg}"
+        return True, f"Scrolled {direction} on screen, Sir."
+
+    elif intent == IntentType.SCREEN_TYPE:
+        target = metadata.get("target", "")
+        text = metadata.get("text", "")
+        success, msg = desktop_ctrl.screen_type(target, text)
+        return True, msg
+
+    elif intent == IntentType.SCREEN_INTERACT:
+        target = metadata.get("target", "")
+        success, msg = desktop_ctrl.screen_click_target(target)
+        return True, msg
+
+    return False, ""
+
+def execute_youtube_play_intent(intent, metadata):
+    """Open YouTube and start the requested search result."""
+    if intent != IntentType.SYSTEM_YOUTUBE_PLAY:
+        return False, ""
+
+    song = metadata.get("song", "").strip()
+    if not song:
+        return True, "Please tell me what you would like me to play on YouTube."
+
+    try:
+        pywhatkit.playonyt(song)
+        update_preference("last_played_song", song)
+        remember_interaction(f"open youtube and play {song}", f"Played {song} on YouTube")
+        log_activity(f"Played on YouTube: {song}")
+        return True, f"Opening YouTube and playing {song}."
+    except Exception as e:
+        print(f"YouTube compound play error: {e}")
+        return True, f"I could not play {song} on YouTube: {e}"
+
+def execute_youtube_search_intent(intent, metadata):
+    """Open YouTube search results in default browser."""
+    if intent != IntentType.SYSTEM_YOUTUBE_SEARCH:
+        return False, ""
+
+    search_query = metadata.get("query", "").strip()
+    if not search_query:
+        return True, "Please tell me what you would like to search on YouTube."
+
+    try:
+        import urllib.parse
+        encoded_query = urllib.parse.quote_plus(search_query)
+        search_url = f"https://www.youtube.com/results?search_query={encoded_query}"
+        webbrowser.open(search_url)
+        msg = f"Opening YouTube and searching for {search_query}."
+        remember_interaction(f"search youtube for {search_query}", msg)
+        log_activity(f"YouTube search: {search_query}")
+        return True, msg
+    except Exception as e:
+        print(f"YouTube search error: {e}")
+        return True, f"I encountered an error trying to search YouTube: {e}"
+
 def ask_neura(user_message):
     """
     Handles conversational queries, memory retrieval, web lookup, and selective LLM fallback.
@@ -317,6 +456,26 @@ def ask_neura(user_message):
 
     # Check Desktop Automation or File CRUD first (Zero API Call)
     intent, metadata = route_intent(user_message_clean)
+    handled, res = execute_screen_vision_intent(intent, metadata, user_message_clean)
+    if handled:
+        speak(res)
+        remember_interaction(user_message_clean, res)
+        log_activity(f"Screen Vision {intent}: {res[:40]}")
+        return res
+    handled, res = execute_system_diagnostic_intent(intent)
+    if handled:
+        speak(res)
+        remember_interaction(user_message_clean, res)
+        log_activity(f"Diagnostic {intent}: {res[:40]}")
+        return res
+    handled, res = execute_youtube_play_intent(intent, metadata)
+    if handled:
+        speak(res)
+        return res
+    handled, res = execute_youtube_search_intent(intent, metadata)
+    if handled:
+        speak(res)
+        return res
     handled, res = execute_desktop_or_file_intent(intent, metadata, user_message_clean)
     if handled:
         speak(res)
@@ -384,6 +543,20 @@ def ask_neura(user_message):
         elif learned and "name" in learned:
             response = f"Pleasure to address you, {learned['name']}."
         else:
+            # Check if query targets YouTube
+            if "youtube" in um_lower:
+                yt_term = user_message_clean
+                for prefix in [
+                    "open youtube and search for", "open youtube and search", "open youtube and find",
+                    "search on youtube for", "search in youtube for", "search youtube for",
+                    "search on youtube", "search in youtube", "on youtube", "in youtube", "youtube"
+                ]:
+                    yt_term = re.sub(re.escape(prefix), "", yt_term, flags=re.IGNORECASE).strip()
+                yt_term = yt_term.strip(" '\"")
+                handled, res = execute_youtube_search_intent(IntentType.SYSTEM_YOUTUBE_SEARCH, {"query": yt_term or "trending"})
+                speak(res)
+                return res
+
             # 4. Search & Web Lookup First (Zero API Call for search queries and entity lookups)
             is_search_query = any(k in um_lower for k in [
                 "search", "find", "who is", "who was", "which", "tell me about", "what is", "where is", "google"
@@ -416,7 +589,6 @@ def ask_neura(user_message):
 
             else:
                 # 5. Fallback to Brain LLM only for actual reasoning / generative queries
-                speak("Let me think...")
                 response = generate_ai_response(user_message_clean, memory_mgr)
                 print(f"{IDENTITY['name']}: {response}")
 
@@ -535,6 +707,101 @@ def resolve_folder(folder_input, base_path=None):
             return os.path.join(base_path, folder_input)
 
     return folder_input
+
+
+def open_folder_from_location(folder_name, location):
+    """Open a named folder only within the requested Windows user directory."""
+    home = os.path.expanduser("~")
+    location_map = {
+        "desktop": os.path.join(home, "Desktop"),
+        "downloads": os.path.join(home, "Downloads"),
+        "documents": os.path.join(home, "Documents"),
+        "music": os.path.join(home, "Music"),
+        "pictures": os.path.join(home, "Pictures"),
+    }
+    base_path = location_map.get(location.lower())
+    if not base_path or not os.path.isdir(base_path):
+        return f"I could not find the {location} folder on this computer."
+
+    target_path = resolve_folder(folder_name, base_path)
+    if not os.path.isdir(target_path):
+        return f"I could not find a folder named {folder_name} in {location}."
+
+    try:
+        os.startfile(target_path)
+        return f"Opening the {folder_name} folder from {location}."
+    except OSError as exc:
+        print(f"Folder open error for '{target_path}': {exc}")
+        return f"I found the {folder_name} folder, but could not open it."
+
+
+def open_file_from_system(file_name, location=None):
+    """Find and launch a file from a requested or standard user directory."""
+    home = os.path.expanduser("~")
+    location_map = {
+        "desktop": os.path.join(home, "Desktop"),
+        "downloads": os.path.join(home, "Downloads"),
+        "documents": os.path.join(home, "Documents"),
+        "music": os.path.join(home, "Music"),
+        "pictures": os.path.join(home, "Pictures"),
+    }
+    search_roots = [location_map[location.lower()]] if location and location.lower() in location_map else [
+        path for path in location_map.values() if os.path.isdir(path)
+    ]
+    requested = file_name.strip().strip("\"'")
+
+    def normalize_file_phrase(value):
+        """Remove spoken type words and normalize a file name for matching."""
+        value = os.path.splitext(value)[0].lower().replace("_", " ")
+        value = re.sub(
+            r"\b(?:excel|spreadsheet|xlsx|xls|word|docx?|pdf|powerpoint|"
+            r"pptx?|text|txt|csv|rtf|odt|ods|image|picture|photo|"
+            r"file|document|sheet)\b",
+            " ",
+            value,
+        )
+        return re.sub(r"[^a-z0-9]+", " ", value).strip()
+
+    def file_tokens(value):
+        tokens = normalize_file_phrase(value).split()
+        return {token[:-1] if len(token) > 3 and token.endswith("s") else token for token in tokens}
+
+    direct_path = os.path.expandvars(os.path.expanduser(requested))
+    if os.path.isfile(direct_path):
+        matches = [direct_path]
+    else:
+        requested_tokens = file_tokens(os.path.basename(requested))
+        requested_norm = "".join(sorted(requested_tokens))
+        matches = []
+        for root in search_roots:
+            if not os.path.isdir(root):
+                continue
+            for current_root, _, files in os.walk(root):
+                for candidate in files:
+                    candidate_tokens = file_tokens(candidate)
+                    candidate_norm = "".join(sorted(candidate_tokens))
+                    if (
+                        requested_tokens
+                        and (
+                            requested_tokens <= candidate_tokens
+                            or requested_norm in candidate_norm
+                        )
+                    ):
+                        matches.append(os.path.join(current_root, candidate))
+
+    if not matches:
+        scope = f" in {location}" if location else ""
+        return f"I could not find the file '{file_name}'{scope}."
+    if len(matches) > 1:
+        return f"I found multiple files named '{file_name}'. Please include its folder location."
+
+    target_path = matches[0]
+    try:
+        os.startfile(target_path)
+        return f"Opening {os.path.basename(target_path)}."
+    except OSError as exc:
+        print(f"File open error for '{target_path}': {exc}")
+        return f"I found {os.path.basename(target_path)}, but could not open it."
 
 
 def find_folder(base_path, spoken_name):
@@ -1121,6 +1388,16 @@ def find_and_open(name):
     # Remove common words that don't help the search
     app_name = app_name.replace("application", "").replace("program", "").strip()
 
+    # Photos is a Microsoft Store app and has no searchable .exe/.lnk entry.
+    if app_name in {"photo", "photos", "picture", "pictures", "photo app", "pictures app"}:
+        try:
+            os.startfile("ms-photos:")
+            speak("Opening Photos.")
+            return True
+        except OSError as exc:
+            print(f"Photos app launch error: {exc}")
+            return False
+
     # Define common paths where applications are likely to be found
     search_paths = [
         os.path.join(os.getenv('APPDATA'), 'Microsoft\\Windows\\Start Menu\\Programs'),
@@ -1212,6 +1489,114 @@ def get_weather(city):
         return "Sorry, there was an issue fetching the weather data."
 
 
+def _fast_com_test_urls():
+    """Resolve the current Fast.com test token and download targets."""
+    session = requests.Session()
+    homepage = session.get("https://fast.com/", timeout=8)
+    homepage.raise_for_status()
+    script_match = re.search(r'<script[^>]+src="([^"]+)"', homepage.text, re.IGNORECASE)
+    if not script_match:
+        raise RuntimeError("Fast.com test script was not found.")
+
+    script_url = requests.compat.urljoin(homepage.url, script_match.group(1))
+    script = session.get(script_url, timeout=8)
+    script.raise_for_status()
+    token_match = re.search(r'token:"([^"]+)"', script.text)
+    if not token_match:
+        raise RuntimeError("Fast.com test token was not found.")
+
+    config_url = (
+        "https://api.fast.com/netflix/speedtest"
+        f"?https=true&token={token_match.group(1)}&urlCount=3"
+    )
+    config = session.get(config_url, timeout=8)
+    config.raise_for_status()
+    targets = [item.get("url") for item in config.json() if item.get("url")]
+    if not targets:
+        raise RuntimeError("Fast.com returned no test targets.")
+    return session, targets
+
+
+def _measure_fast_download(session, targets, duration=5.0):
+    """Measure download throughput against Fast.com targets."""
+    started = time.perf_counter()
+    deadline = started + duration
+    received = 0
+    response = None
+    try:
+        response = session.get(targets[0], stream=True, timeout=(8, duration + 8))
+        response.raise_for_status()
+        for chunk in response.iter_content(chunk_size=256 * 1024):
+            if chunk:
+                received += len(chunk)
+            if time.perf_counter() >= deadline:
+                break
+    finally:
+        if response is not None:
+            response.close()
+    elapsed = max(time.perf_counter() - started, 0.001)
+    return (received * 8) / elapsed / 1_000_000
+
+
+def _measure_fast_upload(session, target, duration=4.0):
+    """Measure upload throughput using Fast.com's speed-test endpoint."""
+    payload = os.urandom(4 * 1024 * 1024)
+    started = time.perf_counter()
+    response = session.post(
+        target,
+        data=payload,
+        headers={"Content-Type": "application/octet-stream"},
+        timeout=(8, duration + 8),
+    )
+    response.raise_for_status()
+    elapsed = max(time.perf_counter() - started, 0.001)
+    return (len(payload) * 8) / elapsed / 1_000_000
+
+
+def get_network_speed():
+    """Return Fast.com download and upload measurements in Mbps."""
+    try:
+        session, targets = _fast_com_test_urls()
+        download_samples = [
+            _measure_fast_download(session, [target], duration=3.0)
+            for target in targets[:2]
+        ]
+        download_mbps = max(download_samples)
+        upload_mbps = _measure_fast_upload(session, targets[0])
+        return (
+            f"Your internet speed is approximately {download_mbps:.1f} Mbps download "
+            f"and {upload_mbps:.1f} Mbps upload, measured using Fast.com."
+        )
+    except (requests.RequestException, ValueError, RuntimeError) as exc:
+        print(f"Fast.com speed test error: {exc}")
+        return "I could not complete the Fast.com network speed test. Please check your internet connection."
+
+
+def get_system_condition():
+    """Return current CPU, memory, disk, and battery status."""
+    cpu_percent = psutil.cpu_percent(interval=0.5)
+    memory_info = psutil.virtual_memory()
+    disk_info = psutil.disk_usage(os.path.abspath(os.sep))
+    details = [
+        f"CPU usage is {cpu_percent:.0f} percent",
+        f"RAM usage is {memory_info.percent:.0f} percent",
+        f"disk usage is {disk_info.percent:.0f} percent",
+    ]
+    battery = psutil.sensors_battery()
+    if battery is not None:
+        charging = "and charging" if battery.power_plugged else "and not charging"
+        details.append(f"battery is at {battery.percent:.0f} percent {charging}")
+    return "System condition: " + ", ".join(details) + "."
+
+
+def execute_system_diagnostic_intent(intent):
+    if intent == IntentType.SYSTEM_NETWORK_SPEED:
+        return True, get_network_speed()
+    if intent == IntentType.SYSTEM_CONDITION:
+        return True, get_system_condition()
+    return False, ""
+
+
 # ---------- MEDIA CONTROLS ----------
 def pause_or_resume_media():
     keyboard.press_and_release('play/pause media')
@@ -1298,6 +1683,26 @@ if __name__ == "__main__":
 
         # Check Screen Access & Desktop Automation / File CRUD operations first
         intent, metadata = route_intent(query)
+        handled, res = execute_screen_vision_intent(intent, metadata, query)
+        if handled:
+            speak(res)
+            remember_interaction(query, res)
+            log_activity(f"Screen Vision {intent}: {res[:40]}")
+            continue
+        handled, res = execute_system_diagnostic_intent(intent)
+        if handled:
+            speak(res)
+            remember_interaction(query, res)
+            log_activity(f"Diagnostic {intent}: {res[:40]}")
+            continue
+        handled, res = execute_youtube_play_intent(intent, metadata)
+        if handled:
+            speak(res)
+            continue
+        handled, res = execute_youtube_search_intent(intent, metadata)
+        if handled:
+            speak(res)
+            continue
         handled, res = execute_desktop_or_file_intent(intent, metadata, query)
         if handled:
             speak(res)
@@ -1318,8 +1723,20 @@ if __name__ == "__main__":
             safe_search_lookup(clean_q)
 
         elif 'search' in query or 'find' in query:
-            clean_q = query.split('search', 1)[1].strip() if 'search' in query else query.split('find', 1)[1].strip()
-            safe_search_lookup(clean_q)
+            if 'youtube' in query:
+                yt_term = query
+                for prefix in [
+                    "open youtube and search for", "open youtube and search", "open youtube and find",
+                    "search on youtube for", "search in youtube for", "search youtube for",
+                    "search on youtube", "search in youtube", "on youtube", "in youtube", "youtube"
+                ]:
+                    yt_term = re.sub(re.escape(prefix), "", yt_term, flags=re.IGNORECASE).strip()
+                yt_term = yt_term.strip(" '\"")
+                handled, res = execute_youtube_search_intent(IntentType.SYSTEM_YOUTUBE_SEARCH, {"query": yt_term or "trending"})
+                speak(res)
+            else:
+                clean_q = query.split('search', 1)[1].strip() if 'search' in query else query.split('find', 1)[1].strip()
+                safe_search_lookup(clean_q)
 
         elif 'weather' in query:
             city = ""
@@ -1367,6 +1784,20 @@ if __name__ == "__main__":
                 was_opened = find_and_open(app_name)
                 
                 if not was_opened:
+                    file_result = open_file_from_system(app_name)
+                    if file_result.startswith("Opening "):
+                        speak(file_result)
+                        remember_interaction(query, file_result)
+                        continue
+
+                    is_photos_request = app_name.lower().strip() in {
+                        "photo", "photos", "picture", "pictures",
+                        "photo app", "pictures app",
+                    }
+                    if is_photos_request:
+                        speak("I could not open the Photos app.")
+                        continue
+
                     speak(f"Sorry sir! I couldn't find '{app_name}' on your system. I am trying another way...")
                     success = open_app_with_windows_search(app_name)
                     
@@ -1504,13 +1935,32 @@ if __name__ == "__main__":
             else:
                 find_and_close_app(close_app)
 
-        elif "allow screen access" in query:
+        elif any(p in query for p in [
+            "allow screen access", "grant screen access", "enable screen access",
+            "take screen permission", "take the screen permission", "screen permission",
+            "allow screen permission", "grant screen permission", "enable screen permission",
+            "take background permission", "take the background permission", "take background work permission",
+            "grant background permission", "grant background work permission",
+            "allow background work", "enable background work", "background permission", "background work permission"
+        ]):
             SCREEN_ACCESS_ALLOWED = True
-            speak("Screen access permission granted, Sir.")
+            BACKGROUND_WORK_ALLOWED = True
+            try:
+                update_preference("screen_access_allowed", True)
+                update_preference("background_work_allowed", True)
+            except Exception:
+                pass
+            speak("Screen access and background work permissions have been granted, Sir.")
 
-        elif "stop screen access" in query or "disable screen access" in query:
+        elif any(p in query for p in ["stop screen access", "disable screen access", "revoke screen access", "revoke background", "disable background"]):
             SCREEN_ACCESS_ALLOWED = False
-            speak("Screen access permission revoked, Sir.")
+            BACKGROUND_WORK_ALLOWED = False
+            try:
+                update_preference("screen_access_allowed", False)
+                update_preference("background_work_allowed", False)
+            except Exception:
+                pass
+            speak("Screen access and background work permissions have been revoked, Sir.")
 
         elif any(phrase in query for phrase in [
             'who am i', 'who i am', 'tell me who i am', 'do you know who i am', 'do you know who am i'

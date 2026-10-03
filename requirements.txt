@@ -8,3 +8,9 @@ pygetwindow
 opencv-python
 wikipedia
 python-multipart
+Pillow
+pyautogui
+pytesseract
+winocr
+keyboard
+psutil

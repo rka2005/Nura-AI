@@ -13,10 +13,10 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 
 <p align="center">
-  <strong>An intelligent personal AI companion, cognitive assistant, and Iron Man / JARVIS-inspired cybernetic desktop HUD with deep biometrics (YuNet + SFace), 3D audio reactivity, computer vision, long-term memory, and OS automation.</strong>
+  <strong>An intelligent personal AI companion, cognitive assistant, and Iron Man / JARVIS-inspired cybernetic desktop HUD with deep biometrics (YuNet + SFace), Screen Vision (OCR & semantic layout intelligence), 3D audio reactivity, computer vision, long-term memory, and OS automation.</strong>
 </p>
 
-[Key Features](#-key-features) • [Biometric Vision Pipeline](#-biometric-vision--facial-recognition-pipeline) • [Architecture](#-architecture) • [UI & HUD Showcase](#-ui--hud-showcase) • [Tech Stack](#-tech-stack) • [Directory Structure](#-project-directory-structure) • [Installation & Setup](#-installation--setup) • [Vision Enrollment Guide](#-face-enrollment--vision-tools) • [Command Cheatsheet](#-command-cheatsheet) • [Contact](#-developer--contact)
+[Key Features](#-key-features) • [Biometric Vision Pipeline](#-biometric-vision--facial-recognition-pipeline) • [Screen Vision Subsystem](#-screen-vision--desktop-automation-subsystem) • [Architecture](#-architecture) • [UI & HUD Showcase](#-ui--hud-showcase) • [Tech Stack](#-tech-stack) • [Directory Structure](#-project-directory-structure) • [Installation & Setup](#-installation--setup) • [Vision Enrollment Guide](#-face-enrollment--vision-tools) • [Command Cheatsheet](#-command-cheatsheet) • [Contact](#-developer--contact)
 
 ---
 
@@ -61,11 +61,22 @@ Whether commanded by **natural voice speech**, **tactical keyboard inputs**, or 
 - **Tier 3: Rolling Conversation Memory**: Summarizes conversation history, manages token windows, and logs episodic activity traces.
 - **Memory Retention Index**: Live HUD meter scoring profile depth and memory density.
 
-### 💻 5. Desktop Agency & Automation
+### 💻 5. Desktop Agency & File System CRUD
 - **System Telemetry Matrix**: Real-time live multi-line graphs tracking CPU load, RAM utilization, and NVIDIA GPU/VRAM metrics.
 - **Hardware Controls**: Direct control of screen brightness (`screen_brightness_control`), master volume and mute states (`pycaw`), and media playback.
 - **Vision Optics Module**: Live OpenCV webcam stream with sci-fi viewfinder overlays, target crosshairs, and animated radar sweep fallback.
-- **Application & File Operations**: Fuzzy folder and file opening, web navigation, Wikipedia search with automatic Google fallback, and task manager integration.
+- **File System Operations**: Full CRUD file management (`create`, `read`, `update`, `delete`, `list`) and fuzzy folder/file discovery without external API calls.
+
+### 👁️‍🗨️ 6. Screen Vision & Semantic Layout Intelligence (Zero Hardcoding)
+- **Dynamic OCR & Multi-DPI Coordinate Translation**: Captures live desktop displays, extracts spatial text boxes via Windows Media OCR (`winocr`) with PyTesseract fallback, and dynamically scales pixel coordinates to logical mouse space (`screenshot_size / pyautogui.size()`) for pixel-perfect targeting on 100%, 125%, 150%, or 200% scaling.
+- **Semantic Layout Understanding (Google & YouTube)**:
+  - **Search Bars**: Automatically isolates the search input field in Google Search (`y ≈ 6-13%`) and YouTube (`y ≈ 3-9%`) with calibrated geometric fallbacks.
+  - **Filter Tabs & Chips**: Dynamically identifies horizontal navigation tabs (`AI Mode`, `All`, `Images`, `Videos`, `News`, `Forums`, `Short videos`, `Tools`, `More` on Google; `All`, `Music`, `Podcasts`, `Mixes`, `Live` on YouTube) and left-sidebar navigation tabs (`Home`, `Shorts`, `Subscriptions`, `Library`).
+  - **Clickable Link Titles vs. Description Snippets**: Distinctly separates the primary clickable headline (`<h3>` title) from descriptive paragraphs, breadcrumb URLs, bio lines, and metadata.
+  - **Video Cards**: Isolates video titles from channel names, view counts, and timestamps.
+- **Precision Title Scoring Algorithm**: Employs a multi-factor weighting algorithm that awards heavy bonuses for headline font sizes (`height >= 18px`), top card position, and 3-10 word lengths, while disqualifying brand badges, URLs, and heavily penalizing description markers (bullets `•`, `I'm a...`, `student`, `connections`, `followers`, `...`, `@gmail`).
+- **Foreground Window Management**: Automatically activates and brings browsers (`Brave`, `Chrome`, `Edge`, `Firefox`) into focus prior to clicking target links.
+- **Visual Screen Scene Summary**: Interrogates the active foreground application and describes visible UI landmarks and content cards upon voice request (*"What is currently open on my screen?"*).
 
 ---
 
@@ -120,6 +131,76 @@ Rohit Kumar Adak       Enrolled Name / Anon             ▼                   �
 
 ---
 
+## 🖥️ Screen Vision & Desktop Automation Subsystem
+
+Neura's **Screen Vision engine** (`brain/screen_vision.py`) equips the assistant with full visual understanding of what is actively visible on the user's desktop without hardcoded coordinates:
+
+```
+Screen Capture (Pillow/ImageGrab)
+             │
+             ▼
+DPI Coordinate Scaling (Physical Screenshot Space ──► Logical Mouse Space)
+             │
+             ▼
+Dual OCR Extraction (Windows Media OCR / PyTesseract Fallback)
+             │
+             ▼
+Spatial Grouping & Semantic Classification
+             │
+   ┌─────────┴───────────────────────────────────────────┐
+   ▼                                                     ▼
+[Google Search Page]                             [YouTube Page]
+ • Search Bar (y ≈ 6-13%)                         • Search Bar (y ≈ 3-9%)
+ • Horizontal Filter Tabs (y ≈ 12-18%)            • Filter Chips (All, Music, etc.)
+ • Vertical Content Cards                         • Left Navigation Tabs
+   ├── Clickable Title (<h3>)                       • Video Cards
+   └── Description Snippet (<div>)                    ├── Clickable Video Title
+                                                      └── Metadata / Channel
+             │
+             ▼
+Precision Title Scoring Engine
+ (Heavily favors prominent headings; disqualifies URLs & penalizes description snippets)
+             │
+             ▼
+DesktopController Action Execution (pyautogui / pygetwindow)
+ • Bring browser to foreground
+ • Move cursor with calibrated duration
+ • Click, double-click, type, or scroll
+```
+
+### 1. Semantic Layout & UI Landmark Understanding
+
+| UI Landmark | Google Search Layout | YouTube Layout | General Page Fallback |
+| :--- | :--- | :--- | :--- |
+| **Search Input Bar** | Centered top field (`y ≈ 6-13%`, `x ≈ 8-75%`). Calibrated fallback at `(35% w, 10% h)`. | Top center-left field (`y ≈ 3-9%`, `x ≈ 18-78%`). Calibrated fallback at `(45% w, 5.5% h)`. | Top field with `"search"`, `"find"`, or `"query"`. |
+| **Filter Tabs & Chips** | `AI Mode`, `All`, `Images`, `Videos`, `News`, `Forums`, `Short videos`, `Tools`, `More` (`y ≈ 12-18%`). | Horizontal chips: `All`, `Music`, `Podcasts`, `Mixes`, `Live`, etc. (`y ≈ 7-15%`). | Horizontal nav elements near the top of the viewport. |
+| **Navigation Tabs** | Browser chrome tabs & header options. | Left sidebar navigation: `Home`, `Shorts`, `Subscriptions`, `Library` (`x <= 15%`). | Sidebar and header navigation links. |
+| **Content Cards** | Dynamic vertical clustering based on proportional edge-to-edge gap thresholds (`card_gap = 3.5% h`). | Video cards clustered with tighter vertical thresholds (`card_gap = 1.5% h`). | Vertical content groupings within `10% - 95%` screen height. |
+| **Clickable Titles** | Blue/purple `<h3>` title link. Always prioritized over description text. | Primary video title text element in the card info column. | First prominent headline in the content card. |
+| **Description Snippets** | Body summaries (`<div>`), bio strings, and snippet paragraphs below titles. | Video snippet text located below the channel name and view count metadata. | Body paragraph text located below headings. |
+
+### 2. Precision Title Scoring Engine (Eliminating Description Misclicks)
+
+When navigating web search results, clicking description snippets fails to open the target webpage because search engines only bind hyperlink events to the title heading. Neura's precision scoring evaluates every candidate element within each card:
+
+$$\text{Title Score} = \text{Base}(25) + S_{\text{pos}} + S_{\text{font}} + S_{\text{len}} - P_{\text{desc}} - P_{\text{brand}} - P_{\text{url}} - P_{\text{meta}}$$
+
+- **Positional Weight ($S_{\text{pos}}$)**: Titles are located at the top of cards ($+20$ for index $0$, $+15$ for index $1$, $-10 \times (\text{idx} - 1)$ for subsequent lines).
+- **Font Height Differential ($S_{\text{font}}$)**: Larger headline font sizes receive $+25$ points ($\text{height} \ge 18\text{px}$ and card maximum), while small body text ($\le 15\text{px}$) is penalized $-15$.
+- **Title Length Preference ($S_{\text{len}}$)**: Concise 3–10 word titles receive $+15$ points. Paragraph snippets ($\ge 14$ words) are heavily penalized ($-(w - 12) \times 3.0$).
+- **Description Marker Penalties ($P_{\text{desc}}$)**: Elements containing bullets (`•`, `·`), bio phrases (*"I'm a..."*, *"student"*, *"connections"*, *"followers"*), ellipses (`...`, `…`), dates, or emails receive a severe $-35$ penalty.
+- **Disqualifiers ($P_{\text{brand}}$, $P_{\text{url}}$, $P_{\text{meta}}$)**: Single-word brand titles (e.g. *"LinkedIn"*, *"Instagram"*), URL breadcrumbs (e.g. `site.com > in > ...`), and video metadata (*"views"*, *"ago"*) are penalized $-50$ and disqualified from title selection.
+
+### 3. Desktop Automation Controller (`brain/desktop_controller.py`)
+
+- **`click_link(description_or_index)`**: Focuses the browser window (`Brave`, `Chrome`, `Edge`, `Firefox`), dynamically resolves the requested link title (e.g. *"first link"*, *"second link"*, *"link about Python"*, or numerical index), and executes a smooth mouse click with calibrated fallbacks.
+- **`screen_describe()`**: Captures the foreground window, counts structured UI elements, and speaks a natural summary of what is visible on the screen.
+- **`screen_open_target(desc)` & `screen_click_target(desc)`**: Resolves dynamic visual targets (buttons, links, search bars, tabs, video titles) and triggers clicks.
+- **`screen_scroll(direction)`**: Smoothly scrolls the active viewport up or down, and executes compound actions (*"scroll down and open the second result"*).
+- **`screen_type(target, text)`**: Identifies target input fields on the screen and types requested strings.
+
+---
+
 ## 🏗️ Architecture
 
 Neura decouples visual presentation from cognitive processing and vision inference using a synchronized multi-process architecture:
@@ -155,6 +236,7 @@ flowchart TB
         Router["Intent Router & Dispatcher<br/>(brain/intent_router.py)"]
         Personality["Fixed Personality System<br/>(brain/personality.py)"]
         DesktopCtrl["Desktop Automation Controller<br/>(brain/desktop_controller.py)"]
+        ScreenVision["Screen Vision Engine<br/>(brain/screen_vision.py)"]
         FileMgr["File Manager CRUD<br/>(brain/file_manager.py)"]
         MemoryMgr["3-Tier Memory Manager<br/>(memory/memory_manager.py)"]
     end
@@ -162,6 +244,7 @@ flowchart TB
     subgraph External_APIs ["☁️ Cloud & System Services"]
         Gemini["Google Gemini 2.0 Flash API"]
         Groq["Groq High-Speed LLM"]
+        WinOCR["Windows Media OCR / PyTesseract"]
         WinOS["Windows API / PyAutoGUI / Pycaw"]
     end
 
@@ -172,8 +255,11 @@ flowchart TB
     Bridge_Layer <--> |Pops Commands / Writes State| Core_Engine
     AutoLearnBridge <--> |Syncs Auto-Enrollment| BiometricCore
     Router --> Gemini & Groq
-    Router --> DesktopCtrl & FileMgr
+    Router --> DesktopCtrl & ScreenVision & FileMgr
     Router --> MemoryMgr
+    DesktopCtrl <--> ScreenVision
+    ScreenVision --> WinOCR
+    ScreenVision --> WinOS
     DesktopCtrl --> WinOS
 ```
 
@@ -199,6 +285,7 @@ flowchart TB
 | :--- | :--- |
 | **Programming Language** | Python 3.10 / 3.11 / 3.12 |
 | **Computer Vision & Biometrics** | OpenCV 4.x (`cv2`), YuNet ONNX, SFace ONNX, NumPy |
+| **Screen Vision & Desktop OCR** | Windows Media OCR (`winocr`), PyTesseract, Pillow (`PIL`), `ctypes` (Per-Monitor DPI v2) |
 | **Graphical Interface** | Pygame 2.6, PyAudio |
 | **LLM & AI Reasoning** | Google Gemini 2.0 Flash (`google-generativeai`), Groq API |
 | **Speech & Audio** | `SpeechRecognition`, Windows SAPI5 (`win32com.client`), `pyttsx3`, PyAudio |
@@ -213,43 +300,46 @@ flowchart TB
 ```text
 Neura_test_ai/
 │
-├── neura.py                 # Core AI assistant engine, speech recognition, intent router, execution loop
-├── frontend.py              # Quantum Sci-Fi HUD, 3D sphere, biometric camera viewfinder, telemetry (Pygame)
-├── setup_owner.py           # Primary owner enrollment CLI tool (camera or image folder)
-├── setup_face.py            # Multi-person biometric enrollment, batch folder tool & CLI live learning
-├── test_face_recognition.py # Diagnostic verification and test suite for the biometric pipeline
-├── requirements.txt         # Project package dependencies
-├── .env                     # Private API keys (Gemini, Groq)
+├── neura.py                     # Core AI assistant engine, speech recognition, intent router, execution loop
+├── frontend.py                  # Quantum Sci-Fi HUD, 3D sphere, biometric camera viewfinder, telemetry (Pygame)
+├── setup_owner.py               # Primary owner enrollment CLI tool (camera or image folder)
+├── setup_face.py                # Multi-person biometric enrollment, batch folder tool & CLI live learning
+├── test_screen_vision.py        # 14-test verification suite for Screen Vision, DPI scaling & cursor actions
+├── test_semantic_screen_vision.py # Diagnostic layout tests for Google Search & YouTube UI landmarks
+├── test_face_recognition.py     # Diagnostic verification and test suite for the biometric pipeline
+├── requirements.txt             # Project package dependencies
+├── .env                         # Private API keys (Gemini, Groq)
 │
-├── chat_bridge.json         # IPC bridge: chat message stream
-├── input_bridge.json        # IPC bridge: queued UI commands
-├── status_bridge.json       # IPC bridge: live assistant state
-├── auto_learn_bridge.json   # IPC bridge: unknown face auto-enrollment synchronization
+├── chat_bridge.json             # IPC bridge: chat message stream
+├── input_bridge.json            # IPC bridge: queued UI commands
+├── status_bridge.json           # IPC bridge: live assistant state
+├── auto_learn_bridge.json       # IPC bridge: unknown face auto-enrollment synchronization
 │
-├── vision/                  # Biometric Face Recognition subsystem
-│   ├── __init__.py          # Vision module initialization
-│   ├── face_recognition.py  # FaceRecognitionSystem class, YuNet & SFace models, metric matcher
-│   ├── owner_profile.json   # Enrolled system owner identity and vector embeddings
-│   ├── known_faces.json     # Multi-person enrolled face database (Owner, Guests, Anonymous)
-│   └── models/              # Neural network ONNX model weights
+├── vision/                      # Biometric Face Recognition subsystem
+│   ├── __init__.py              # Vision module initialization
+│   ├── face_recognition.py      # FaceRecognitionSystem class, YuNet & SFace models, metric matcher
+│   ├── owner_profile.json       # Enrolled system owner identity and vector embeddings
+│   ├── known_faces.json         # Multi-person enrolled face database (Owner, Guests, Anonymous)
+│   └── models/                  # Neural network ONNX model weights
 │       ├── face_detection_yunet_2023mar.onnx
 │       └── face_recognition_sface_2021dec.onnx
 │
-├── images/                  # Enrolled face snapshots (e.g., Rohit Kumar Adak.jpg, Anonymous 1.jpg)
+├── images/                      # Enrolled face snapshots (e.g., Rohit Kumar Adak.jpg, Anonymous 1.jpg)
 │
-├── brain/                   # Cognitive intelligence modules
-│   ├── conversation.py      # LLM prompt orchestrator combining identity, memory, and chat history
-│   ├── intent_router.py     # Intent classification engine mapping queries to desktop actions
-│   ├── personality.py       # Neura's fixed personality guidelines, tone, and behavioral directives
-│   ├── desktop_controller.py# Windows automation (volume, brightness, media, apps, screenshots)
-│   └── file_manager.py      # File & folder discovery, fuzzy paths, and CRUD operations
+├── brain/                       # Cognitive intelligence modules
+│   ├── conversation.py          # LLM prompt orchestrator combining identity, memory, and chat history
+│   ├── intent_router.py         # Intent classification engine mapping queries to desktop actions
+│   ├── personality.py           # Neura's fixed personality guidelines, tone, and behavioral directives
+│   ├── screen_vision.py         # Screen Vision engine: OCR, DPI scaling, semantic layouts & title picker
+│   ├── desktop_controller.py    # Desktop controller: browser window focus, link clicks, scrolling, typing
+│   └── file_manager.py          # File & folder discovery, fuzzy paths, and CRUD operations
 │
-├── memory/                  # 3-Tier persistent memory subsystem
-│   ├── memory_manager.py    # MemoryManager class handling facts, preferences, and session context
-│   ├── user_memory.json     # Long-term user profile, preferences, and episodic activity log
+├── memory/                      # 3-Tier persistent memory subsystem
+│   ├── memory_manager.py        # MemoryManager class handling facts, preferences, and session context
+│   ├── user_memory.json         # Long-term user profile, preferences, and episodic activity log
 │   └── conversation_memory.json # Recent chat turns and summarized conversation memory
 │
-└── test_voice.py            # Diagnostic script for audio voice testing
+└── test_voice.py                # Diagnostic script for audio voice testing
 ```
 
 ---
@@ -334,6 +424,17 @@ Verify model loading, embedding consistency, and distance thresholds:
 python test_face_recognition.py
 ```
 
+### 4. Testing the Screen Vision & Desktop Subsystem
+Run the 14-test verification suite covering screen capture, DPI scaling, OCR grouping, target selection, and safe cursor movements:
+```bash
+python test_screen_vision.py
+```
+
+Run dedicated semantic layout tests for Google Search (search bar, filter tabs, clickable link titles vs. descriptions) and YouTube (search bar, chips, nav tabs, video titles):
+```bash
+python test_semantic_screen_vision.py
+```
+
 ---
 
 ## 🎮 Running Neura AI
@@ -359,6 +460,13 @@ Neura accepts commands via **Voice Speech**, **Typing into the HUD input box**, 
 
 | Action Category | Example Commands / Triggers | Action Triggered |
 | :--- | :--- | :--- |
+| **Screen Scene Vision** | *"What is currently open on my screen?"*, *"What's on my screen?"* | Analyzes active window, OCR elements, and summarizes visible UI landmarks |
+| **Search Result Links** | *"Open the second Google search result"*, *"Click the first link"*, *"Click the 2nd link"* | Focuses browser and clicks the clickable link title (strictly excluding descriptions) |
+| **Topic Link Opening** | *"Open the link about Python"*, *"Click link about YouTube"* | Identifies and clicks the link title matching the keyword on screen |
+| **Filter Tabs & Chips** | *"Click images tab"*, *"Switch to videos tab"*, *"Open short videos tab"* | Locates horizontal filter chips/tabs (Google & YouTube) and clicks them |
+| **Search Bar Focus** | *"Click the search bar"*, *"Focus search box"*, *"Search on active tab for AI"* | Clicks the search input bar or enters text into on-screen query fields |
+| **Video & Song Playback** | *"Play the second song"*, *"Click the third video"*, *"Open first video"* | Detects visible video cards, identifies requested index, and opens media |
+| **Viewport Scrolling** | *"Scroll down"*, *"Scroll down and open the third result"* | Scrolls viewport down/up, with optional compound target click execution |
 | **Visual Identity** | *"Who am I?"* | Inspects camera stream; identifies Owner, Guest, or Unknown |
 | **Biometric Presence** | *Owner steps in front of camera* | Authenticates identity and speaks personalized greeting |
 | **Conversational AI** | *"Explain quantum computing in simple terms"* | Streams response via Gemini / Groq with memory context |
@@ -367,6 +475,7 @@ Neura accepts commands via **Voice Speech**, **Typing into the HUD input box**, 
 | **Display Brightness** | *"Increase brightness"*, *"Set brightness to 80%"* | Modifies monitor brightness via WMI |
 | **Search & Information** | *"Who is Elon Musk"*, *"Weather in Kolkata"*, *"Search Python docs"* | Wikipedia search (auto-falls back to Google) |
 | **Cognitive Memory** | *"What do you know about me"*, *"My favorite city is Tokyo"* | Reads / writes to 3-tier memory engine |
+| **File System CRUD** | *"Create file notes.txt with hello"*, *"Read file notes.txt"*, *"List files"* | Deterministic file operations via `FileManager` without API calls |
 | **Productivity & Notes** | *"Take a note"*, *"Read my notes"*, *"Set a reminder"* | Creates timestamped local notes & timers |
 | **System Diagnostics** | *"Open task manager"*, *"Take a screenshot"* | Launches task manager or captures display |
 | **Session Control** | *"Clear conversation"*, *"Clear memory"*, *"Goodbye"* | Resets memory buffers or cleanly shuts down |

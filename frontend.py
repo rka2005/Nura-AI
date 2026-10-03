@@ -46,6 +46,11 @@ CURRENT_FACE_CONF = 0.0
 CURRENT_FACE_IS_OWNER = False
 CURRENT_FACE_IDENTITY = "Unknown"
 
+UNKNOWN_CONFIRMATION_SECONDS = 5
+
+unknown_start_time = None
+unknown_person_confirmed = False
+
 face_system = None
 mem_manager = None
 
@@ -1487,6 +1492,7 @@ def main():
 
     global face_system, mem_manager, CURRENT_FACE_STATE, CURRENT_FACE_LABEL, CURRENT_FACE_CONF, CURRENT_FACE_IS_OWNER, CURRENT_FACE_IDENTITY
     global active_person_spoken, candidate_person, candidate_streak, no_face_start_time, last_speech_time, is_first_startup_greeting
+    global unknown_start_time, unknown_person_confirmed
     global is_learning_active, learning_step, learning_name, learning_samples, learning_started_time, last_unknown_prompt_time, last_sample_cap_time
 
     try:
@@ -1555,6 +1561,15 @@ def main():
                         CURRENT_FACE_IDENTITY = face_name if has_face else "None"
 
                         now = time.time()
+
+                        # Track only uninterrupted unknown-face visibility. Any known
+                        # face or empty frame starts the five-second window over.
+                        if is_unknown and not has_known_in_frame:
+                            if unknown_start_time is None:
+                                unknown_start_time = now
+                        else:
+                            unknown_start_time = None
+                            unknown_person_confirmed = False
 
                         # If a known face is in frame, cancel any active unknown learning sequence to greet known person instead
                         if has_known_in_frame and is_learning_active:
@@ -1683,8 +1698,9 @@ def main():
                                 candidate_person = current_cand
                                 candidate_streak = 1
 
-                            # Require 2 consecutive frames for stable identification
-                            if candidate_streak >= 2:
+                            # Require an unknown face to remain continuously visible
+                            # before starting the name-registration flow.
+                            if candidate_streak >= (1 if is_unknown else 2):
                                 if is_rohit:
                                     if current_cand != active_person_spoken and (now - last_speech_time) >= 1.5:
                                         active_person_spoken = current_cand
@@ -1718,7 +1734,11 @@ def main():
                                     # BUT ONLY IF THERE IS NO KNOWN FACE IN FRAME!
                                     if not has_known_in_frame:
                                         CURRENT_FACE_STATE = FACE_STATE_UNKNOWN
-                                        if (now - last_unknown_prompt_time) >= UNKNOWN_PROMPT_COOLDOWN:
+                                        if (
+                                            unknown_start_time is not None
+                                            and now - unknown_start_time >= UNKNOWN_CONFIRMATION_SECONDS
+                                            and (now - last_unknown_prompt_time) >= UNKNOWN_PROMPT_COOLDOWN
+                                        ):
                                             is_learning_active = True
                                             learning_step = "ASKED_NAME"
                                             learning_name = None

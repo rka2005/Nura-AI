@@ -3,6 +3,7 @@ from brain.conversation import generate_ai_response
 from brain.intent_router import route_intent, IntentType
 from brain.desktop_controller import DesktopController
 from brain.file_manager import FileManager
+from brain.screen_vision import ScreenVision
 
 __all__ = [
     "get_personality_prompt",
@@ -12,5 +13,6 @@ __all__ = [
     "route_intent",
     "IntentType",
     "DesktopController",
-    "FileManager"
+    "FileManager",
+    "ScreenVision"
 ]
