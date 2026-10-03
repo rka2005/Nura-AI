@@ -124,19 +124,20 @@ Rohit Kumar Adak       Enrolled Name / Anon             ▼                   �
 ### Face Matching Criteria
 - **Detection Algorithm**: OpenCV Zoo YuNet (Input resolution dynamically scaled, score threshold: `0.70`, NMS threshold: `0.30`).
 - **Feature Extractor**: OpenCV Zoo SFace (Output: 128-D float vector, L2 normalized).
-- **Metric Comparison**: Cosine Distance = $1.0 - \text{CosineSimilarity}(\vec{e}_1, \vec{e}_2)$. Matches are classified when distance $\le 0.363$.
-- **Known-Face Priority Ranking:**
+- **Metric Comparison**: $\text{Cosine Distance} = 1.0 - \text{CosineSimilarity}(\vec{e}_1, \vec{e}_2)$ (matches classified when $\text{distance} \le 0.363$).
+- **Known-Face Priority Ranking**:
 
-  $$
-  \text{Priority} =
-  \begin{cases}
-  2 & \text{if Owner} \\
-  1 & \text{if Enrolled Guest} \\
-  0 & \text{if Unknown}
-  \end{cases}
-  $$
+$$
+\text{Priority} =
+\begin{cases}
+2, & \text{if Owner} \\
+1, & \text{if Enrolled Guest} \\
+0, & \text{if Unknown}
+\end{cases}
+$$
 
-  **Tiebreaker:** Bounding box area $(w \times h)$.
+- **Tiebreaker**: Bounding box area $(w \times h)$.
+
 ---
 
 ## 🖥️ Screen Vision & Desktop Automation Subsystem
@@ -191,7 +192,9 @@ DesktopController Action Execution (pyautogui / pygetwindow)
 
 When navigating web search results, clicking description snippets fails to open the target webpage because search engines only bind hyperlink events to the title heading. Neura's precision scoring evaluates every candidate element within each card:
 
-$$\text{Title Score} = \text{Base}(25) + S_{\text{pos}} + S_{\text{font}} + S_{\text{len}} - P_{\text{desc}} - P_{\text{brand}} - P_{\text{url}} - P_{\text{meta}}$$
+$$
+\text{Title Score} = \text{Base}(25) + S_{\text{pos}} + S_{\text{font}} + S_{\text{len}} - P_{\text{desc}} - P_{\text{brand}} - P_{\text{url}} - P_{\text{meta}}
+$$
 
 - **Positional Weight ($S_{\text{pos}}$)**: Titles are located at the top of cards ($+20$ for index $0$, $+15$ for index $1$, $-10 \times (\text{idx} - 1)$ for subsequent lines).
 - **Font Height Differential ($S_{\text{font}}$)**: Larger headline font sizes receive $+25$ points ($\text{height} \ge 18\text{px}$ and card maximum), while small body text ($\le 15\text{px}$) is penalized $-15$.
