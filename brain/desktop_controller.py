@@ -462,5 +462,116 @@ class DesktopController:
 
     def screen_describe(self) -> str:
         """Analyzes and describes what is currently visible on the screen."""
+        try:
+            self.screen_vision._ensure_input_desktop()
+        except Exception:
+            pass
         return self.screen_vision.get_screen_description()
+
+    def get_background_activity(self) -> str:
+        """
+        Inspects and summarizes active background user applications, top resource
+        consumers, media playback, and overall system load.
+        """
+        try:
+            user32 = ctypes.windll.user32
+            hdesk = user32.OpenInputDesktop(0, False, 0x01FF)
+            if hdesk:
+                user32.SetThreadDesktop(hdesk)
+        except Exception:
+            pass
+
+        fg_hwnd = None
+        try:
+            fg_hwnd = ctypes.windll.user32.GetForegroundWindow()
+        except Exception:
+            pass
+
+        bg_windows = []
+        ignored = {
+            'program manager', 'windows input experience', 'default ime', 'msctfime ui',
+            'dwm', 'task view', 'settings'
+        }
+
+        try:
+            import win32gui
+            def _enum_win_proc(hwnd, _):
+                if hwnd == fg_hwnd or not win32gui.IsWindowVisible(hwnd):
+                    return
+                t = win32gui.GetWindowText(hwnd).strip()
+                if not t or t.lower() in ignored:
+                    return
+                try:
+                    rect = win32gui.GetWindowRect(hwnd)
+                    w, h = rect[2] - rect[0], rect[3] - rect[1]
+                    if w > 120 and h > 120 and t not in bg_windows:
+                        bg_windows.append(t)
+                except Exception:
+                    if t not in bg_windows:
+                        bg_windows.append(t)
+
+            win32gui.EnumWindows(_enum_win_proc, None)
+        except Exception:
+            try:
+                all_wins = gw.getAllWindows()
+                for w in all_wins:
+                    t = w.title.strip()
+                    if t and t.lower() not in ignored and getattr(w, '_hWnd', None) != fg_hwnd and t not in bg_windows:
+                        bg_windows.append(t)
+            except Exception:
+                pass
+
+        cpu_pct = 0.0
+        ram_pct = 0.0
+        try:
+            import psutil
+            cpu_pct = psutil.cpu_percent(interval=0.1)
+            ram_pct = psutil.virtual_memory().percent
+        except Exception:
+            pass
+
+        media_msg = ""
+        try:
+            from pycaw.pycaw import AudioUtilities
+            sessions = AudioUtilities.GetAllSessions()
+            for s in sessions:
+                if s.State == 1 and s.Process:
+                    pname = s.Process.name()
+                    if pname.lower() not in ["python.exe", "system"]:
+                        media_msg = f"Audio playback is active from {pname}."
+                        break
+        except Exception:
+            pass
+
+        clean_apps = []
+        for w in bg_windows:
+            w_clean = w
+            if len(w_clean) > 35:
+                w_clean = w_clean[:32] + "..."
+            clean_apps.append(f"'{w_clean}'")
+
+        if clean_apps:
+            apps_text = ", ".join(clean_apps[:4])
+            more_text = f" and {len(clean_apps) - 4} more" if len(clean_apps) > 4 else ""
+            desc = f"In the background, you have {len(clean_apps)} application{'s' if len(clean_apps) > 1 else ''} running: {apps_text}{more_text}. Overall system background load is {cpu_pct:.0f}% CPU and {ram_pct:.0f}% RAM."
+        else:
+            desc = f"In the background, there are no other user application windows open. Overall system background load is {cpu_pct:.0f}% CPU and {ram_pct:.0f}% RAM with background services running smoothly."
+
+        if media_msg:
+            desc += f" {media_msg}"
+
+        return desc
+
+    def get_screen_and_background_activity(self) -> str:
+        """
+        Produces a unified, comprehensive intelligence report of both foreground
+        screen state and background activity.
+        """
+        try:
+            self.screen_vision._ensure_input_desktop()
+        except Exception:
+            pass
+        screen_desc = self.screen_describe()
+        bg_desc = self.get_background_activity()
+        return f"{screen_desc} {bg_desc}"
 

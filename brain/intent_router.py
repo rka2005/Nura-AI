@@ -25,6 +25,8 @@ class IntentType:
     SYSTEM_FILE_OPEN = "SYSTEM_FILE_OPEN"
     SYSTEM_JOKE = "SYSTEM_JOKE"
     SYSTEM_PERMISSION = "SYSTEM_PERMISSION"
+    SYSTEM_BACKGROUND_STATUS = "SYSTEM_BACKGROUND_STATUS"
+    SYSTEM_SCREEN_AND_BACKGROUND_STATUS = "SYSTEM_SCREEN_AND_BACKGROUND_STATUS"
     
     MEMORY_CLEAR = "MEMORY_CLEAR"
     MEMORY_INSPECT = "MEMORY_INSPECT"
@@ -60,6 +62,18 @@ class IntentType:
     FILE_DELETE = "FILE_DELETE"
     FILE_LIST = "FILE_LIST"
 
+    # Multi-Agent Orchestration
+    AGENT_PROJECT_TEST = "AGENT_PROJECT_TEST"
+    AGENT_PROJECT_DIAGNOSTIC = "AGENT_PROJECT_DIAGNOSTIC"
+    AGENT_MONITOR_START = "AGENT_MONITOR_START"
+    AGENT_MONITOR_STOP = "AGENT_MONITOR_STOP"
+    AGENT_STATUS = "AGENT_STATUS"
+    AGENT_SKILL_LEARN = "AGENT_SKILL_LEARN"
+    AGENT_SKILL_RUN = "AGENT_SKILL_RUN"
+    AGENT_SCREEN_INSPECT = "AGENT_SCREEN_INSPECT"
+    AGENT_OFFICE_SHOW = "AGENT_OFFICE_SHOW"
+    AGENT_OFFICE_CLOSE = "AGENT_OFFICE_CLOSE"
+
     CONVERSATION = "CONVERSATION"
 
 def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
@@ -90,13 +104,173 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
     if any(phrase in q for phrase in ['clear memory', 'reset memory', 'wipe memory', 'forget everything']):
         return IntentType.MEMORY_CLEAR, {}
 
-    # Screen and Background Work Permissions
+    # 0. Compound Screen / Background Permission with Task or Follow-up Action
+    # e.g., "by taking screen permission i want to perform some tasks and ask what happens in the screen and at the backgroud. make setup all these"
+    # or "take screen permission and tell me what is on the screen"
+    # or "with screen permission click the first link"
+    perm_compound_match = re.search(
+        r"^(?:by\s+)?(?:taking|take|grant|granting|allow|allowing|enable|enabling|give|giving|with|after\s+taking)\s+(?:the\s+)?(?:screen\s+and\s+background\s+permission[s]?|background\s+and\s+screen\s+permission[s]?|screen\s+permission[s]?|background\s+permission[s]?|screen\s+access|background\s+access|permission[s]?\s+for\s+screen(?:\s+and\s+background)?)\s*(?:[,;]|\s+and|\s+then|\s+to|\s+i\s+want\s+to|\s+please)?\s*(.*)$",
+        q,
+        re.IGNORECASE
+    )
+    if perm_compound_match:
+        remainder = perm_compound_match.group(1).strip()
+        remainder_cleaned = re.sub(
+            r"^(?:and\s+|then\s+|to\s+|i\s+want\s+to\s+(?:perform\s+some\s+tasks\s+and\s+)?|i\s+want\s+to\s+|perform\s+some\s+tasks\s+and\s+|please\s+|ask\s+)+",
+            "",
+            remainder,
+            flags=re.IGNORECASE
+        ).strip()
+        remainder_cleaned = re.sub(r"[,\.]?\s*make\s+setup\s+all\s+(?:of\s+)?these.*$", "", remainder_cleaned, flags=re.IGNORECASE).strip()
+        if remainder_cleaned:
+            sub_intent, sub_meta = route_intent(remainder_cleaned)
+            sub_meta["permission_granted"] = True
+            return sub_intent, sub_meta
+
+    # 3D Agent Visualization / Virtual Office Display & Close (Switches Neura Optics Camera View)
+    if any(p in q for p in [
+        'show 3d visualization', 'show 3d visual', 'open 3d visualization', 'open 3d visual',
+        'show 3d visualisation', 'open 3d visualisation', 'show the 3d visualisation',
+        'show 3d office', 'open 3d office', 'show the 3d office', 'open the 3d office',
+        'show agent visualization', 'open agent visualization', 'show agent office', 'open agent office',
+        'show agent visualisation', 'open agent visualisation',
+        'show the 3d visualization', 'open the 3d visualization',
+        'show 3d visualization of the agent works', 'show 3d visualization of the agent work',
+        'show 3d visualisation of the agent works', 'show 3d visualisation of the agent work',
+        'show 3d visualization of agent works', 'show 3d visualization of agent',
+        'show 3d visualisation of agent works', 'show 3d visualisation of agent',
+        'show agent visualizer', 'open agent visualizer',
+        '3d visualization of the agent', 'show 3d agent', 'open 3d agent',
+        'open agent 3d office', 'show agent 3d office', 'show agent works',
+        'visualisation of agents', 'visualization of agents',
+        'show me the visualisation', 'show me the visualization'
+    ]) or re.search(r"\b(?:show|open|display)\s+(?:me\s+)?(?:the\s+)?(?:3d\s+)?(?:agent\s+)?(?:visuali[sz]ation|visual|office|visualizer)(?:\s+of\s+(?:the\s+)?(?:agent\s+works?|agents?))?\b", q):
+        return IntentType.AGENT_OFFICE_SHOW, {}
+
+    if any(p in q for p in [
+        'close visualization', 'close the visualization', 'hide visualization',
+        'close visualisation', 'close the visualisation', 'hide visualisation',
+        'close 3d visualization', 'close 3d visual', 'hide 3d visualization', 'hide 3d visual',
+        'close 3d visualisation', 'hide 3d visualisation',
+        'close 3d office', 'hide 3d office', 'close the 3d office', 'hide the 3d office',
+        'close agent visualization', 'hide agent visualization', 'close agent office', 'hide agent office',
+        'close agent visualisation', 'hide agent visualisation',
+        'close the 3d visualization', 'hide the 3d visualization',
+        'close the 3d visualisation', 'hide the 3d visualisation',
+        'close 3d visualization of the agent works', 'close 3d visualizer', 'close agent visualizer',
+        'close that one', 'close that', 'show camera', 'switch to camera',
+        'close the 3d visual', 'close 3d view', 'close the agent office'
+    ]) or re.search(r"\b(?:close|hide|dismiss|shut|exit)\s+(?:the\s+)?(?:3d\s+)?(?:agent\s+)?(?:visuali[sz]ation|visual|office|visualizer)\b", q) \
+       or re.search(r"\bclose\s+(?:that\s+one|that|it|visuali[sz]ation|the\s+visuali[sz]ation)\b", q):
+        return IntentType.AGENT_OFFICE_CLOSE, {}
+
+    # Multi-Agent Subsystem: Task Status / "What are you doing?"
+    if any(phrase in q for phrase in [
+        'what are you doing', 'what are you working on', 'what are your active tasks',
+        'what tasks are running', 'show active tasks', 'active tasks', 'current tasks',
+        'task status', 'agent status', 'show task status', 'what is running'
+    ]):
+        return IntentType.AGENT_STATUS, {}
+
+    # Multi-Agent Subsystem: Comprehensive Project Testing Workflow
+    # "Neura, test my project", "test this project", "inspect my project", "run project tests"
+    if re.search(r"\b(?:test|inspect|audit|check)\s+(?:my\s+|this\s+|the\s+)?project\b", q) or any(p in q for p in [
+        'test my project', 'test this project', 'test the project', 'test project',
+        'run project tests', 'run tests on my project', 'inspect project', 'audit project'
+    ]):
+        return IntentType.AGENT_PROJECT_TEST, {}
+
+    # Multi-Agent Subsystem: Multi-Agent Failure Investigation & Diagnostic
+    # "find out why my project is failing", "why is my project crashing", "check what's wrong with my project"
+    if any(p in q for p in [
+        'why my project is failing', 'why is my project failing', 'find out why my project is failing',
+        'why is my project crashing', 'find out why my project crashed', 'diagnose my project',
+        'debug my project', "check what's wrong with my project", "check whats wrong with my project",
+        'what is wrong with my project', 'investigate project failure'
+    ]):
+        return IntentType.AGENT_PROJECT_DIAGNOSTIC, {}
+
+    # Multi-Agent Subsystem: Background Process & Task Monitoring
+    # "monitor this task", "start my model training and monitor it", "monitor my model training"
+    if any(p in q for p in [
+        'stop monitoring', 'stop monitor', 'cancel monitoring', 'end monitoring'
+    ]):
+        return IntentType.AGENT_MONITOR_STOP, {}
+
+    if any(p in q for p in [
+        'monitor this task', 'monitor the task', 'monitor my task', 'start monitoring',
+        'monitor training', 'monitor my model training', 'monitor this process',
+        'monitor background task', 'monitor the process', 'monitor this job'
+    ]) or re.search(r"\b(?:start|run)\s+.*?\s+and\s+monitor\s+it\b", q) or re.search(r"\bmonitor\s+(?:this|the|my)?\s*(?:training|process|task|job|build)\b", q):
+        cmd = None
+        # Extract command if specified, e.g. "start my model training and monitor it"
+        if "model training" in q or "training" in q:
+            cmd_name = "Model Training"
+        else:
+            cmd_name = "Background Task"
+        return IntentType.AGENT_MONITOR_START, {"name": cmd_name}
+
+    # Multi-Agent Subsystem: Reusable Skill Learning
+    # "learn this workflow", "learn this skill", "create a skill for"
+    if any(p in q for p in [
+        'learn this workflow', 'learn the workflow', 'learn workflow',
+        'learn this skill', 'learn repetitive workflow', 'learn repeated workflow',
+        'create a skill for', 'learn a skill'
+    ]):
+        skill_name_match = re.search(r"(?:for|named|called)\s+([a-zA-Z0-9_\-\s]+)$", q)
+        skill_name = skill_name_match.group(1).strip() if skill_name_match else "learned_workflow"
+        return IntentType.AGENT_SKILL_LEARN, {"name": skill_name}
+
+    if any(p in q for p in ['run skill', 'execute skill', 'start skill']):
+        skill_name_match = re.search(r"(?:skill)\s+([a-zA-Z0-9_\-]+)$", q)
+        skill_name = skill_name_match.group(1).strip() if skill_name_match else ""
+        return IntentType.AGENT_SKILL_RUN, {"name": skill_name}
+
+    # Multi-Agent Subsystem: Visual Screen and Terminal Error Inspection
+    if any(p in q for p in [
+        'inspect screen errors', 'check terminal errors', 'check screen for errors',
+        "what's wrong on my screen", 'what is wrong on my screen', 'scan screen for errors'
+    ]):
+        return IntentType.AGENT_SCREEN_INSPECT, {}
+
+    # Dual Screen and Background Activity Inspection
+    has_screen_kw = any(w in q for w in ['screen', 'display', 'desktop', 'monitor', 'foreground'])
+    has_bg_kw = any(w in q for w in ['background', 'backgroud', 'back ground'])
+    if (has_screen_kw and has_bg_kw) or any(phrase in q for phrase in [
+        'screen and background', 'background and screen',
+        'what happens in the screen and at the background',
+        'what is happening in the screen and at the background',
+        'what happens on the screen and in the background',
+        'what is happening on screen and in the background',
+        'what happens on screen and at the background'
+    ]):
+        return IntentType.SYSTEM_SCREEN_AND_BACKGROUND_STATUS, {}
+
+    # Background Activity Inspection
+    if any(phrase in q for phrase in [
+        'what happens at the background', 'what happens in the background',
+        'what is happening in the background', 'what is happening at the background',
+        "what's happening in the background", "what's happening at the background",
+        'what is running in the background', "what's running in the background",
+        'what is running at the background', "what's running at the background",
+        'what background apps are running', 'what apps are in the background',
+        'what is working in the background', 'what is happening in background',
+        'check background tasks', 'check background activity', 'check the background',
+        'background activity', 'background status', 'background tasks',
+        'what processes are in the background', 'show background processes',
+        'show background activity', 'what is going on in the background',
+        'what is on the background', "what's on the background"
+    ]) or (has_bg_kw and any(w in q for w in ['running', 'happening', 'happens', 'tasks', 'activity', 'status', 'apps', 'processes', 'going on', 'what'])):
+        return IntentType.SYSTEM_BACKGROUND_STATUS, {}
+
+    # Screen and Background Work Permissions (standalone grant/revoke)
     if any(p in q for p in [
         'screen permission', 'screen access', 'background permission', 'background work permission',
-        'background work', 'take screen permission', 'take the screen permission',
+        'background work', 'take screen permission', 'take the screen permission', 'take my screen permission',
         'allow screen access', 'grant screen access', 'allow screen permission', 'grant screen permission',
         'take background permission', 'take background work permission', 'grant background permission',
-        'grant background work permission', 'allow background work', 'enable background work'
+        'grant background work permission', 'allow background work', 'enable background work',
+        'skin permission', 'skin access', 'take my skin permission', 'take skin permission'
     ]):
         action = "revoke" if any(w in q for w in ['stop', 'disable', 'revoke', 'deny']) else "grant"
         return IntentType.SYSTEM_PERMISSION, {"action": action}
@@ -139,12 +313,18 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
 
     # 1. Screen Describe / Content Awareness
     if any(phrase in q for phrase in [
+        'what happens in the screen', 'what happens on the screen', 'what happens on screen',
+        'what is happening in the screen', 'what is happening on the screen', 'what is happening on screen',
+        "what's happening on the screen", "what's happening in the screen", "what's happening on screen",
+        'what is going on on my screen', 'what is going on in the screen', 'what is going on on screen',
         'what is currently open on my screen', 'what is open on my screen', "what's open on my screen",
-        'what is on my screen', "what's on my screen", 'what is on screen', "what's on screen",
+        'what is on my screen', "what's on my screen", 'what is on the screen', "what's on the screen",
+        'what is on screen', "what's on screen",
         'what is this page about', "what's this page about", 'what is on this page', "what's on this page",
         'describe my screen', 'describe the screen', 'read my screen', 'read the screen',
         'what do you see on my screen', 'what can you see on my screen', 'scan screen and describe',
-        'summarize this page', 'summarize current screen'
+        'summarize this page', 'summarize current screen', 'check the screen', 'check my screen',
+        'inspect the screen', 'inspect my screen', 'look at my screen', 'look at the screen'
     ]):
         return IntentType.SCREEN_DESCRIBE, {}
 

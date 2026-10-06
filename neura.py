@@ -24,6 +24,7 @@ import json
 import pyjokes
 import psutil
 from art import text2art
+from typing import Any, Dict, List, Optional
 
 from memory.memory_manager import MemoryManager
 from brain.conversation import generate_ai_response
@@ -39,6 +40,8 @@ from vision.face_recognition import (
 )
 
 CHAT_BRIDGE_FILE = "chat_bridge.json"
+INPUT_BRIDGE_FILE = "input_bridge.json"
+STATUS_BRIDGE_FILE = "status_bridge.json"
 AUTO_LEARN_BRIDGE_FILE = "auto_learn_bridge.json"
 load_dotenv()
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
@@ -55,6 +58,10 @@ SCREEN_ACCESS_ALLOWED = memory_mgr.get_preference("screen_access_allowed", True)
 BACKGROUND_WORK_ALLOWED = memory_mgr.get_preference("background_work_allowed", True)
 desktop_ctrl = DesktopController()
 file_mgr = FileManager()
+
+# Multi-Agent Subsystem Orchestrator
+from brain.agents import get_orchestrator, Task, TaskState, PermissionLevel
+agent_orchestrator = get_orchestrator()
 
 # Configure Wikipedia User-Agent to comply with Wikimedia API policy
 try:
@@ -94,6 +101,26 @@ def send_to_frontend(role, message):
         except Exception as e:
             print("Chat bridge error:", e)
             break
+
+def set_status_bridge_field(key: str, value: Any):
+    """Safely updates a key in status_bridge.json without disrupting other fields."""
+    try:
+        data = {}
+        if os.path.exists(STATUS_BRIDGE_FILE):
+            try:
+                with open(STATUS_BRIDGE_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                data = {}
+        data[key] = value
+        temp_bridge = f"{STATUS_BRIDGE_FILE}.tmp"
+        with open(temp_bridge, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_bridge, STATUS_BRIDGE_FILE)
+    except Exception:
+        pass
 
 def load_memory():
     """Load or initialize memory structure via MemoryManager."""
@@ -228,14 +255,7 @@ def execute_desktop_or_file_intent(intent, metadata, raw_query: str = ""):
     rq = raw_query.lower()
 
     # Handle explicit permission requests
-    if intent == IntentType.SYSTEM_PERMISSION or any(p in rq for p in [
-        "allow screen access", "grant screen access", "enable screen access",
-        "take screen permission", "take the screen permission", "screen permission",
-        "allow screen permission", "grant screen permission", "enable screen permission",
-        "take background permission", "take the background permission", "take background work permission",
-        "grant background permission", "grant background work permission",
-        "allow background work", "enable background work", "background permission", "background work permission"
-    ]):
+    if intent == IntentType.SYSTEM_PERMISSION:
         action = metadata.get("action", "grant")
         if action == "revoke" or any(p in rq for p in ["stop screen access", "disable screen access", "revoke screen access", "revoke background", "disable background"]):
             SCREEN_ACCESS_ALLOWED = False
@@ -255,6 +275,16 @@ def execute_desktop_or_file_intent(intent, metadata, raw_query: str = ""):
             except Exception:
                 pass
             return True, "Screen access and background work permissions have been granted, Sir."
+
+    # If action was accompanied by permission grant metadata, guarantee permissions are saved
+    if metadata.get("permission_granted"):
+        SCREEN_ACCESS_ALLOWED = True
+        BACKGROUND_WORK_ALLOWED = True
+        try:
+            update_preference("screen_access_allowed", True)
+            update_preference("background_work_allowed", True)
+        except Exception:
+            pass
 
     # Automatically ensure screen access and background execution are active
     if not SCREEN_ACCESS_ALLOWED:
@@ -298,7 +328,7 @@ def execute_desktop_or_file_intent(intent, metadata, raw_query: str = ""):
     elif intent == IntentType.DESKTOP_SCREENSHOT:
         success, path_or_err = desktop_ctrl.take_screenshot()
         if success:
-            return True, f"Screenshot captured and saved at {path_or_err}, Sir."
+            return True, f"Screenshot captured and saved, Sir."
         return True, f"Could not capture screenshot: {path_or_err}"
 
     elif intent == IntentType.FILE_CREATE:
@@ -342,6 +372,8 @@ def execute_screen_vision_intent(intent, metadata, raw_query: str = ""):
     """
     Executes Screen Vision capabilities:
     - SCREEN_DESCRIBE: Screen content inspection and verbal summary
+    - SYSTEM_SCREEN_AND_BACKGROUND_STATUS: Comprehensive dual foreground & background intelligence
+    - SYSTEM_BACKGROUND_STATUS: Background applications, tasks, and system resource inspection
     - SCREEN_CLICK: Dynamic element targeting and click action
     - SCREEN_OPEN: Dynamic link, result, or video opening
     - SCREEN_PLAY: Dynamic song/video playback from screen
@@ -349,9 +381,30 @@ def execute_screen_vision_intent(intent, metadata, raw_query: str = ""):
     - SCREEN_TYPE: Typing into detected on-screen fields
     Returns (handled: bool, response_message: str).
     """
+    global SCREEN_ACCESS_ALLOWED, BACKGROUND_WORK_ALLOWED
+
+    perm_prefix = ""
+    if metadata.get("permission_granted"):
+        SCREEN_ACCESS_ALLOWED = True
+        BACKGROUND_WORK_ALLOWED = True
+        try:
+            update_preference("screen_access_allowed", True)
+            update_preference("background_work_allowed", True)
+        except Exception:
+            pass
+        perm_prefix = "Screen access and background work permissions have been granted, Sir. "
+
     if intent == IntentType.SCREEN_DESCRIBE:
         summary = desktop_ctrl.screen_describe()
-        return True, summary
+        return True, f"{perm_prefix}{summary}"
+
+    elif intent == IntentType.SYSTEM_SCREEN_AND_BACKGROUND_STATUS:
+        summary = desktop_ctrl.get_screen_and_background_activity()
+        return True, f"{perm_prefix}{summary}"
+
+    elif intent == IntentType.SYSTEM_BACKGROUND_STATUS:
+        summary = desktop_ctrl.get_background_activity()
+        return True, f"{perm_prefix}{summary}"
 
     elif intent == IntentType.SCREEN_CLICK:
         target = metadata.get("target", "")
@@ -359,7 +412,7 @@ def execute_screen_vision_intent(intent, metadata, raw_query: str = ""):
             success, msg = desktop_ctrl.click_link(target)
         else:
             success, msg = desktop_ctrl.screen_click_target(target)
-        return True, msg
+        return True, f"{perm_prefix}{msg}"
 
     elif intent == IntentType.SCREEN_OPEN:
         target = metadata.get("target", "")
@@ -367,12 +420,12 @@ def execute_screen_vision_intent(intent, metadata, raw_query: str = ""):
             success, msg = desktop_ctrl.click_link(target)
         else:
             success, msg = desktop_ctrl.screen_open_target(target)
-        return True, msg
+        return True, f"{perm_prefix}{msg}"
 
     elif intent == IntentType.SCREEN_PLAY:
         target = metadata.get("target", "")
         success, msg = desktop_ctrl.screen_open_target(target)
-        return True, msg
+        return True, f"{perm_prefix}{msg}"
 
     elif intent == IntentType.SCREEN_SCROLL:
         direction = metadata.get("direction", "down")
@@ -382,19 +435,19 @@ def execute_screen_vision_intent(intent, metadata, raw_query: str = ""):
         if then_act and then_tgt:
             time.sleep(0.4)
             success, msg = desktop_ctrl.screen_open_target(then_tgt)
-            return True, f"Scrolled {direction}. {msg}"
-        return True, f"Scrolled {direction} on screen, Sir."
+            return True, f"{perm_prefix}Scrolled {direction}. {msg}"
+        return True, f"{perm_prefix}Scrolled {direction} on screen, Sir."
 
     elif intent == IntentType.SCREEN_TYPE:
         target = metadata.get("target", "")
         text = metadata.get("text", "")
         success, msg = desktop_ctrl.screen_type(target, text)
-        return True, msg
+        return True, f"{perm_prefix}{msg}"
 
     elif intent == IntentType.SCREEN_INTERACT:
         target = metadata.get("target", "")
         success, msg = desktop_ctrl.screen_click_target(target)
-        return True, msg
+        return True, f"{perm_prefix}{msg}"
 
     return False, ""
 
@@ -439,6 +492,77 @@ def execute_youtube_search_intent(intent, metadata):
         print(f"YouTube search error: {e}")
         return True, f"I encountered an error trying to search YouTube: {e}"
 
+def execute_agent_intent(intent, metadata, raw_query: str = ""):
+    """
+    Executes specialized agent workflows via the AgentOrchestrator:
+    - AGENT_PROJECT_TEST: Inspects project structure, dependencies, AST, and runs test suites.
+    - AGENT_PROJECT_DIAGNOSTIC: Multi-agent failure diagnostic (Project + Screen + Monitor).
+    - AGENT_MONITOR_START: Initiates non-blocking background surveillance of tasks/processes.
+    - AGENT_MONITOR_STOP: Stops active monitoring sessions.
+    - AGENT_STATUS: Reports active task lifecycles and agent states ("What are you doing?").
+    - AGENT_SKILL_LEARN: Learns, validates, and registers reusable automation skills.
+    - AGENT_SKILL_RUN: Executes a learned skill safely.
+    - AGENT_SCREEN_INSPECT: Inspects screen for terminal tracebacks and compiler errors.
+    Returns (handled: bool, response_message: str).
+    """
+    global SCREEN_ACCESS_ALLOWED, BACKGROUND_WORK_ALLOWED
+    orch = get_orchestrator()
+    orch.screen_agent.set_permission(SCREEN_ACCESS_ALLOWED)
+
+    if intent == IntentType.AGENT_PROJECT_TEST:
+        msg = orch.test_project()
+        return True, msg
+
+    elif intent == IntentType.AGENT_PROJECT_DIAGNOSTIC:
+        msg = orch.investigate_project_failure()
+        return True, msg
+
+    elif intent == IntentType.AGENT_MONITOR_START:
+        task_name = metadata.get("name", "Background Task")
+        msg = orch.start_monitoring(name=task_name)
+        return True, msg
+
+    elif intent == IntentType.AGENT_MONITOR_STOP:
+        msg = orch.stop_monitoring()
+        return True, msg
+
+    elif intent == IntentType.AGENT_STATUS:
+        msg = orch.get_status_overview()
+        return True, msg
+
+    elif intent == IntentType.AGENT_SKILL_LEARN:
+        skill_name = metadata.get("name", "learned_workflow")
+        perm_granted = metadata.get("permission_granted", False)
+        msg = orch.learn_workflow(name=skill_name, permission_granted=perm_granted)
+        return True, msg
+
+    elif intent == IntentType.AGENT_SKILL_RUN:
+        skill_name = metadata.get("name", "")
+        res = orch.skill_agent.run_skill(skill_name, "user_request")
+        msg = res.get("message") or res.get("error", "Skill execution completed.")
+        return True, msg
+
+    elif intent == IntentType.AGENT_SCREEN_INSPECT:
+        findings, text = orch.screen_agent.inspect_visible_errors("user_request")
+        if findings:
+            err_items = [f"• [{f.severity.value}] {f.title}: {f.description}" for f in findings]
+            msg = f"I scanned your screen and detected {len(findings)} visible error(s):\n" + "\n".join(err_items)
+        else:
+            msg = "I inspected your visible screen and found no active compiler or terminal exception tracebacks."
+        return True, msg
+
+    elif intent == IntentType.AGENT_OFFICE_SHOW:
+        set_status_bridge_field("show_agent_office", True)
+        if hasattr(orch, "get_agents_status_dict"):
+            set_status_bridge_field("agents", orch.get_agents_status_dict())
+        return True, "Displaying 3D Agent Office visualization in Neura Optics, Sir."
+
+    elif intent == IntentType.AGENT_OFFICE_CLOSE:
+        set_status_bridge_field("show_agent_office", False)
+        return True, "Closing 3D visualization and restoring camera view in Neura Optics, Sir."
+
+    return False, ""
+
 def ask_neura(user_message):
     """
     Handles conversational queries, memory retrieval, web lookup, and selective LLM fallback.
@@ -456,6 +580,15 @@ def ask_neura(user_message):
 
     # Check Desktop Automation or File CRUD first (Zero API Call)
     intent, metadata = route_intent(user_message_clean)
+
+    # Multi-Agent Orchestration Check
+    handled, res = execute_agent_intent(intent, metadata, user_message_clean)
+    if handled:
+        speak(res)
+        remember_interaction(user_message_clean, res)
+        log_activity(f"Agent {intent}: {res[:40]}")
+        return res
+
     handled, res = execute_screen_vision_intent(intent, metadata, user_message_clean)
     if handled:
         speak(res)
@@ -494,7 +627,21 @@ def ask_neura(user_message):
         return mem_reply
 
     # 2. Instant Fixed Identity & Conversational Status (Zero API Call)
-    if any(phrase in um_lower for phrase in ["how are you", "how do you do"]):
+    user_name = memory_mgr.user_memory.get("user_facts", {}).get("name")
+    honorific = user_name if user_name else "Sir"
+
+    if any(phrase in um_lower for phrase in [
+        "it's very nice", "its very nice", "very nice", "ohh it's very nice", "oh it's very nice",
+        "that's very nice", "thats very nice", "that's nice", "thats nice", "so nice", "looks nice",
+        "it is very nice", "that is very nice", "that is nice", "this is very nice", "this is nice",
+        "you are doing well", "you're doing well", "doing well", "good job", "great job", "well done",
+        "awesome", "that's awesome", "thats awesome", "cool", "that's cool", "thats cool", "wonderful",
+        "amazing", "perfect", "sounds good", "nice work", "superb", "brilliant", "love it", "great work"
+    ]):
+        response = f"Thank you, {honorific}! I'm glad you think so. I am always happy to assist you."
+    elif any(um_lower == w for w in ["ok", "okay", "alright", "all right", "got it", "understood", "sure", "fine", "cool", "great", "perfect"]):
+        response = f"Understood, {honorific}! Let me know whenever you need anything."
+    elif any(phrase in um_lower for phrase in ["how are you", "how do you do"]):
         response = "I am doing well, Sir. How can I assist you today?"
     elif any(greet in um_lower.split() for greet in ["hello", "hi", "hey"]):
         response = "Hello Sir! It's good to hear from you."
@@ -516,8 +663,6 @@ def ask_neura(user_message):
     else:
         # 3. Check automatic preference and mood learning
         learned = memory_mgr.auto_learn(user_message_clean)
-        user_name = memory_mgr.user_memory.get("user_facts", {}).get("name")
-        honorific = user_name if user_name else "Sir"
 
         if learned and "mood" in learned:
             mood = learned["mood"]
@@ -557,16 +702,29 @@ def ask_neura(user_message):
                 speak(res)
                 return res
 
-            # 4. Search & Web Lookup First (Zero API Call for search queries and entity lookups)
-            is_search_query = any(k in um_lower for k in [
-                "search", "find", "who is", "who was", "which", "tell me about", "what is", "where is", "google"
-            ]) or (len(user_message_clean.split()) <= 4 and not any(k in um_lower for k in [
-                "explain", "code", "write", "generate", "create", "why", "how do", "how to"
-            ]))
+            # 4. Search & Web Lookup First (Strictly for explicit search requests and factual entity questions)
+            search_explicit_prefixes = [
+                "search for", "search on google for", "search in google for", "search google for",
+                "search on wikipedia for", "search wikipedia for", "search for me", "search",
+                "find information on", "look up on google", "look up", "lookup",
+                "tell me about", "who was", "where is"
+            ]
+            
+            is_search_query = any(um_lower.startswith(p) for p in search_explicit_prefixes) or "search on google" in um_lower or "search on wikipedia" in um_lower
+
+            # Informational 'who is' (excluding who is your creator/god/identity)
+            if um_lower.startswith("who is ") and not any(k in um_lower for k in ["your", "my", "rohit", "god", "creator", "playing"]):
+                is_search_query = True
+
+            # Informational 'what is' entity lookups (excluding assistant status, screen, time, background)
+            if (um_lower.startswith("what is ") or um_lower.startswith("what's ")) and not any(k in um_lower for k in [
+                "your", "my", "screen", "background", "playing", "time", "date", "weather", "doing", "up", "going on", "neura"
+            ]):
+                is_search_query = True
 
             # Complex generative or reasoning queries that actually require LLM intelligence
             requires_llm = any(k in um_lower for k in [
-                "explain", "code", "write", "debug", "how to", "how can i", "why is", "why does", "solve", "compare", "translate", "summarize", "advice", "opinion", "think about"
+                "explain", "code", "write", "debug", "how to", "how can i", "why is", "why does", "solve", "compare", "translate", "summarize", "advice", "opinion", "think about", "feel"
             ])
 
             if is_search_query and not requires_llm:
@@ -575,7 +733,7 @@ def ask_neura(user_message):
                 for prefix in [
                     "can you tell me which", "can you tell me who is", "can you tell me what is", 
                     "tell me which", "tell me who is", "tell me about", "search for", "search", 
-                    "find", "who is", "who was", "which", "what is", "where is", "google"
+                    "find information on", "find", "who is", "who was", "which", "what is", "where is", "google"
                 ]:
                     if clean_term.lower().startswith(prefix):
                         clean_term = clean_term[len(prefix):].strip()
@@ -588,7 +746,7 @@ def ask_neura(user_message):
                 return response
 
             else:
-                # 5. Fallback to Brain LLM only for actual reasoning / generative queries
+                # 5. Fallback to Brain LLM for natural human conversations and reasoning
                 response = generate_ai_response(user_message_clean, memory_mgr)
                 print(f"{IDENTITY['name']}: {response}")
 
@@ -639,27 +797,65 @@ def find_and_close_app(spoken_name):
         speak(f"Sorry, I don't know how to close {spoken_name}. The app may not be in my list.")
 
 
+def check_input_bridge() -> str:
+    """Checks and pops any pending user commands from input_bridge.json."""
+    if not os.path.exists(INPUT_BRIDGE_FILE):
+        return ""
+    try:
+        with open(INPUT_BRIDGE_FILE, "r", encoding="utf-8") as f:
+            cmds = json.load(f)
+        if isinstance(cmds, list) and cmds:
+            next_cmd = cmds.pop(0)
+            temp_file = f"{INPUT_BRIDGE_FILE}.tmp"
+            with open(temp_file, "w", encoding="utf-8") as f:
+                json.dump(cmds, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_file, INPUT_BRIDGE_FILE)
+            if next_cmd and next_cmd.strip():
+                clean = next_cmd.strip()
+                print(f"[Input Bridge] Processing queued GUI command: '{clean}'")
+                return clean.lower()
+    except Exception:
+        pass
+    return ""
+
 def takeCommand():
+    # 1. Immediately prioritize queued commands from frontend GUI chat
+    gui_cmd = check_input_bridge()
+    if gui_cmd:
+        return gui_cmd
+
     r = sr.Recognizer()
-    with sr.Microphone(device_index=1) as source:
-        print("Listening...")
-        r.adjust_for_ambient_noise(source)
-        try:
-            audio = r.listen(source, timeout=4)
-            print("Recognizing...")
-            query = r.recognize_google(audio, language='en-in')
-            print(f"User said: {query}")
-            send_to_frontend("user", query)
-            return query.lower()
-        except sr.UnknownValueError:
-            print("Sorry, I couldn't understand what you said. Please try again.")
-            return ""
-        except sr.RequestError as e:
-            print(f"Could not request results; {e}")
-            return ""
-        except Exception as e:
-            print(f"An error occurred: {e}")
-            return ""
+    try:
+        with sr.Microphone(device_index=1) as source:
+            print("Listening...")
+            r.adjust_for_ambient_noise(source, duration=0.4)
+            # Recheck bridge right before blocking on listen
+            gui_cmd = check_input_bridge()
+            if gui_cmd:
+                return gui_cmd
+            try:
+                audio = r.listen(source, timeout=3.5, phrase_time_limit=8.0)
+                print("Recognizing...")
+                query = r.recognize_google(audio, language='en-in')
+                print(f"User said: {query}")
+                send_to_frontend("user", query)
+                return query.lower()
+            except sr.WaitTimeoutError:
+                return check_input_bridge()
+            except sr.UnknownValueError:
+                print("Sorry, I couldn't understand what you said. Please try again.")
+                return check_input_bridge()
+            except sr.RequestError as e:
+                print(f"Could not request results; {e}")
+                return check_input_bridge()
+            except Exception as e:
+                print(f"An error occurred: {e}")
+                return check_input_bridge()
+    except Exception:
+        time.sleep(0.4)
+        return check_input_bridge()
 
 def resolve_folder(folder_input, base_path=None):
     """
@@ -1594,6 +1790,10 @@ def execute_system_diagnostic_intent(intent):
         return True, get_network_speed()
     if intent == IntentType.SYSTEM_CONDITION:
         return True, get_system_condition()
+    if intent == IntentType.SYSTEM_BACKGROUND_STATUS:
+        return True, desktop_ctrl.get_background_activity()
+    if intent == IntentType.SYSTEM_SCREEN_AND_BACKGROUND_STATUS:
+        return True, desktop_ctrl.get_screen_and_background_activity()
     return False, ""
 
 
@@ -1615,11 +1815,14 @@ def detect_media_activity():
     Detect if media is playing using system heuristics.
     """
     try:
+        from pycaw.pycaw import AudioUtilities
         sessions = AudioUtilities.GetAllSessions()
         for session in sessions:
             if session.State == 1:  # Active
                 if session.Process:
-                    return f"Media is playing from {session.Process.name()}"
+                    pname = session.Process.name()
+                    if pname.lower() not in ["python.exe", "system"]:
+                        return f"Media is playing from {pname}"
         return "No active media playback detected."
     except Exception:
         return "Unable to detect media status."
@@ -1653,7 +1856,19 @@ if __name__ == "__main__":
     reminder_thread.start()
 
     while True:
+        # Check proactive announcements from background agents
+        try:
+            announcements = agent_orchestrator.get_proactive_announcements()
+            for ann in announcements:
+                print(f"📢 [Neura Proactive Alert]: {ann}")
+                speak(ann)
+        except Exception as e:
+            print(f"[Proactive Announcement Error]: {e}")
+
         query = takeCommand()
+        if not query:
+            time.sleep(0.05)
+            continue
 
         if 'good bye' in query or 'goodbye' in query or 'exit' in query or 'bye' in query or "quit" in query or "good night" in query:
             speak("Goodbye Sir!")
@@ -1681,8 +1896,16 @@ if __name__ == "__main__":
             except Exception:
                 pass
 
-        # Check Screen Access & Desktop Automation / File CRUD operations first
+        # Check Multi-Agent Subsystem first
         intent, metadata = route_intent(query)
+        handled, res = execute_agent_intent(intent, metadata, query)
+        if handled:
+            speak(res)
+            remember_interaction(query, res)
+            log_activity(f"Agent {intent}: {res[:40]}")
+            continue
+
+        # Check Screen Access & Desktop Automation / File CRUD operations
         handled, res = execute_screen_vision_intent(intent, metadata, query)
         if handled:
             speak(res)
@@ -1714,13 +1937,15 @@ if __name__ == "__main__":
             clean_q = query.replace("wikipedia", "").strip()
             safe_search_lookup(clean_q)
 
-        elif 'about' in query:
-            clean_q = query.split('about', 1)[1].strip()
-            safe_search_lookup(clean_q)
+        elif any(query.startswith(p) for p in ['tell me about', 'information about', 'search about']):
+            clean_q = re.sub(r'^(?:tell me about|information about|search about)\s*', '', query).strip()
+            if clean_q:
+                safe_search_lookup(clean_q)
 
-        elif 'who is' in query:
-            clean_q = query.split('who is', 1)[1].strip()
-            safe_search_lookup(clean_q)
+        elif (query.startswith('who is ') or query.startswith('who was ')) and not any(k in query for k in ['your creator', 'your god', 'in front of the camera', 'at the camera']):
+            clean_q = query.split('who is' if 'who is' in query else 'who was', 1)[1].strip()
+            if clean_q:
+                safe_search_lookup(clean_q)
 
         elif 'search' in query or 'find' in query:
             if 'youtube' in query:
@@ -1925,10 +2150,14 @@ if __name__ == "__main__":
         elif 'close' in query:
             close_app = query.split('close', 1)[1].strip()
             
-            if not app_name:
+            if not close_app:
                 speak("Please specify which application you would like to close.")
 
-            elif 'outlook' in close_app:
+            elif any(v in close_app.lower() for v in ['visualisation', 'visualization', 'office', '3d']):
+                handled, res = execute_agent_intent(IntentType.AGENT_OFFICE_CLOSE, {})
+                speak(res)
+
+            elif 'outlook' in close_app.lower():
                 speak("Sure Sir, closing Outlook.")
                 close_outlook()
 

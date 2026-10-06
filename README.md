@@ -11,9 +11,11 @@
 [![Groq](https://img.shields.io/badge/Fast_LLM-Groq_API-F55036?style=flat-square)](https://groq.com/)
 [![Platform](https://img.shields.io/badge/Platform-Windows_10%2F11-0078D6?style=flat-square&logo=windows)](https://microsoft.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
+[![Architecture: Multi-Agent](https://img.shields.io/badge/Architecture-Multi--Agent_Orchestrator-00e5ff?style=flat-square)](brain/agents/)
+[![3D Office](https://img.shields.io/badge/Visualizer-3D_Agent_Office-FF6B6B?style=flat-square)](frontend.py)
 
 <p align="center">
-  <strong>An intelligent personal AI companion, cognitive assistant, and Iron Man / JARVIS-inspired cybernetic desktop HUD with deep biometrics (YuNet + SFace), Screen Vision (OCR & semantic layout intelligence), 3D audio reactivity, computer vision, long-term memory, and OS automation.</strong>
+  <strong>An intelligent personal AI companion, multi-agent cognitive orchestrator, and a cybernetic desktop HUD with deep biometrics (YuNet + SFace), 3D Virtual Agent Office in Neura Optics, Screen Vision (OCR & semantic layout intelligence), 3D audio reactivity, computer vision, long-term memory, and OS automation.</strong>
 </p>
 
 [Key Features](#-key-features) • [Biometric Vision Pipeline](#-biometric-vision--facial-recognition-pipeline) • [Screen Vision Subsystem](#-screen-vision--desktop-automation-subsystem) • [Architecture](#-architecture) • [UI & HUD Showcase](#-ui--hud-showcase) • [Tech Stack](#-tech-stack) • [Directory Structure](#-project-directory-structure) • [Installation & Setup](#-installation--setup) • [Vision Enrollment Guide](#-face-enrollment--vision-tools) • [Command Cheatsheet](#-command-cheatsheet) • [Contact](#-developer--contact)
@@ -25,6 +27,8 @@
 ## 🌌 Overview
 
 **Neura AI** is a state-of-the-art multimodal desktop companion engineered by **Rohit Kumar Adak**. Built with a deep focus on sci-fi aesthetics, conversational intelligence, deep facial biometrics, and native operating system automation, Neura bridges high-speed LLM reasoning (via **Google Gemini 2.0 Flash** & **Groq**) with direct desktop agency, deep computer vision, and a dynamic, audio-reactive cybernetic HUD.
+
+Neura incorporates a full **multi-agent personal AI architecture** where a central orchestrator coordinates four specialized autonomous agents (`ProjectAgent`, `ScreenAgent`, `MonitorAgent`, and `SkillAgent`), dividing complex tasks and supervising background jobs with non-intrusive proactive updates. The system features a real-time **3D Virtual Agent Office** rendered directly within the Neura Optics camera HUD, allowing users to watch agents physically travel along isometric conduit rails between the Central Hall and their department workstations in real time.
 
 Neura features an advanced **dual-model biometric pipeline** powered by OpenCV Zoo's **YuNet** (ultra-fast NMS face detection) and **SFace** (128-D cosine embedding feature extraction). Neura recognizes the system owner, identifies enrolled guests, auto-learns new persons on camera through natural voice dialogues, gracefully handles anonymity on refusal, and prioritizes greetings for known individuals over unknown prompts.
 
@@ -78,7 +82,31 @@ Whether commanded by **natural voice speech**, **tactical keyboard inputs**, or 
 - **Foreground Window Management**: Automatically activates and brings browsers (`Brave`, `Chrome`, `Edge`, `Firefox`) into focus prior to clicking target links.
 - **Visual Screen Scene Summary**: Interrogates the active foreground application and describes visible UI landmarks and content cards upon voice request (*"What is currently open on my screen?"*).
 
+### 🤖 7. Multi-Agent Personal AI Subsystem (Orchestrator & Specialized Agents)
+- **Central Coordinator (`brain/agents/orchestrator.py`)**: `neura.py` serves as the primary controller delegating tasks to dedicated autonomous agents, synthesizing findings, and proactively informing the user without disrupting active workflows.
+- **Specialized Agent Team (`brain/agents/`)**:
+  - **`ProjectAgent` (QA & Diagnostics)**: Autonomous codebase auditor that validates project health, executes test runners, checks syntax trees, and isolates bugs.
+  - **`ScreenAgent` (Vision & Inspection)**: Direct screen perception, visual exception detection in terminals, OCR layout understanding, and UI error tracking.
+  - **`MonitorAgent` (Background Operations)**: Persistent non-intrusive supervisor watching background jobs, CPU spikes, RAM thresholds, and process lifecycles.
+  - **`SkillAgent` (Domain Automation)**: Dynamic skill learner and executor that registers, verifies, and executes parameterized workflows safely.
+- **Enterprise Task Engine (`TaskManager` & `EventBus`)**: Complete lifecycle state tracking (`PENDING`, `IN_PROGRESS`, `COMPLETED`, `FAILED`, `CANCELLED`), priority queuing, permission boundaries (`SAFE`, `CONFIRMATION_REQUIRED`, `ADMIN`), and throttled proactive announcements.
+
+### 🏢 8. 3D Virtual Agent Office in Neura Optics (Real-Time Isometric Visualization)
+- **In-Place Optics Viewport Switcher**: Directly renders within the **Neura Optics** camera panel at the top-right of the frontend HUD without altering the central sphere, HUD core, or audio spectrum.
+- **Office Geometry & Departments**:
+  - **Central Hall / Common Lounge**: Diamond platform at `(0, 0)` with a glowing holographic pedestal where idle agents rest and hover.
+  - **QA Lab** (`(-68, -24)`): Dual holographic workstations for `PROJECT_TESTER` (Electric Cyan).
+  - **Vision Lab** (`(24, -68)`): Optical sensor radar array for `SCREEN_VISION` (Neon Magenta).
+  - **Ops Center** (`(-24, 68)`): Server rack towers with active status LEDs for `SYS_MONITOR` (Emerald Green).
+  - **Tool Bay** (`(68, 24)`): Workbench matrix for `SKILL_RUNNER` (Amber / Gold).
+- **Dynamic Movement & Work Animation**: Agents physically navigate along glowing isometric power conduits from the Central Hall to their department workstations when tasks are assigned (`IDLE` $\leftrightarrow$ `BUSY`), displaying floating status beacons, bobbing animations, and particle spark effects while working.
+- **Dual Voice & GUI Toggles**:
+  - Voice command *"show the 3d visualization of the agent works"* (or *"open 3d office"*, *"show agent visualization"*) instantly switches Neura Optics from camera feed to the 3D office.
+  - Voice command *"close visualization"* (or *"close the visualization"*, *"show camera"*, *"switch to camera"*) smoothly closes the office and restores the live camera feed.
+  - Interactive buttons: Direct header chip `[► 3D AGENTS]` / `[► CAM VIEW]`, top bar `[3D AGTS]` button, plus in-viewport `[DEMO]`, `[RESET]`, and agent click-to-inspect telemetry.
+
 ---
+
 
 ## 👁️ Biometric Vision & Facial Recognition Pipeline
 
@@ -222,7 +250,7 @@ flowchart TB
         HUD["Quantum Sci-Fi HUD<br/>(Pygame + PyAudio)"]
         Sphere["3D Audio-Reactive Sphere & Reactor Core"]
         ChatUI["Conversation Feed & Interactive Input Box"]
-        CamView["Optics HUD & Live Biometric Viewfinder"]
+        CamView["Optics HUD: Biometric Viewfinder<br/>⇄ 3D Virtual Agent Office (AgentOffice3D)"]
         Telemetry["Hardware Performance Monitor<br/>(CPU / RAM / GPU)"]
     end
 
@@ -238,8 +266,17 @@ flowchart TB
     subgraph Bridge_Layer ["⚡ IPC Bridge Layer (JSON & Safe Locks)"]
         ChatBridge[("chat_bridge.json<br/>Assistant & User Feed")]
         InputBridge[("input_bridge.json<br/>Command Queue")]
-        StatusBridge[("status_bridge.json<br/>Live Assistant State")]
+        StatusBridge[("status_bridge.json<br/>Live Assistant State & show_agent_office")]
         AutoLearnBridge[("auto_learn_bridge.json<br/>Biometric Enrollment Signal")]
+    end
+
+    subgraph Agent_Subsystem ["🤖 Multi-Agent Subsystem (brain/agents/)"]
+        Orchestrator["AgentOrchestrator<br/>(Main Coordinator)"]
+        ProjectAgent["ProjectAgent<br/>(QA & Diagnostics)"]
+        ScreenAgent["ScreenAgent<br/>(Vision & Error Inspection)"]
+        MonitorAgent["MonitorAgent<br/>(Background Ops & Health)"]
+        SkillAgent["SkillAgent<br/>(Domain Skills & Tools)"]
+        TaskManager["TaskManager & EventBus<br/>(Lifecycles & Non-Blocking Pub/Sub)"]
     end
 
     subgraph Core_Engine ["🧠 Backend Engine (neura.py)"]
@@ -264,10 +301,14 @@ flowchart TB
     BiometricCore <--> KnownFacesDB & OwnerProfile & ImageStorage
     HUD <--> |Reads Chat / Updates Input| Bridge_Layer
     Bridge_Layer <--> |Pops Commands / Writes State| Core_Engine
+    StatusBridge <--> |Syncs 3D Office Mode & Agent States| CamView
     AutoLearnBridge <--> |Syncs Auto-Enrollment| BiometricCore
     Router --> Gemini & Groq
     Router --> DesktopCtrl & ScreenVision & FileMgr
     Router --> MemoryMgr
+    Router --> Orchestrator
+    Orchestrator --> ProjectAgent & ScreenAgent & MonitorAgent & SkillAgent
+    Orchestrator <--> TaskManager
     DesktopCtrl <--> ScreenVision
     ScreenVision --> WinOCR
     ScreenVision --> WinOS
@@ -280,11 +321,11 @@ flowchart TB
 
 | HUD Module | Description | Visual Highlights |
 | :--- | :--- | :--- |
-| **Top Cyber Header** | Central system status and operational dashboard | Live pulsing status badge (`READY`, `LISTENING`, `PROCESSING`, `SPEAKING`), live digital clock, instant theme selector chips, and `MIC`/`CAM`/`BOLD`/`CLR` toggles. |
+| **Top Cyber Header** | Central system status and operational dashboard | Live pulsing status badge (`READY`, `LISTENING`, `PROCESSING`, `SPEAKING`), live digital clock, instant theme selector chips, and `MIC`/`CAM`/`3D AGTS`/`BOLD`/`CLR` toggles. |
 | **Tactical Chat Feed** | Conversation stream & keyboard input | Formatted user bubbles (`YOU`) in cyan/blue glass and Neura responses (`NEURA`) in glowing theme accents with timestamps, smooth wheel scroll, and inline command input bar. |
 | **Tactical Command Chips** | One-click action prompts | Instant action chips for `[JOKE]`, `[WEATHER]`, `[MEMORY]`, `[MUSIC]`, `[FILES]`, and `[TASKMGR]`. |
 | **Quantum Reactor Core** | Audio-reactive visualizer | 3D mathematical dot sphere, rotating hexagon processor, cyan gap arcs, sweeping lasers, and radial reaction rays. |
-| **Biometric Optics Viewfinder** | Camera & computer vision frame | Live camera feed with scanlines, corner brackets `[+]`, target lock crosshairs, identity HUD tags (Owner/Guest/Anonymous), confidence bar, and animated rotating radar sweep when in standby mode. |
+| **Neura Optics (Camera & 3D Agent Office)** | Dynamic dual-mode viewport (Live Scanner ⇄ 3D Agent Facility) | Live camera feed with biometric face tracking, or full 3D isometric Agent Office featuring Central Hall, 4 department rooms (QA Lab, Vision Lab, Ops Center, Tool Bay), animated agent navigation along power conduits (`IDLE` $\leftrightarrow$ `BUSY`), work particle FX, `[DEMO]` toggle, and 1-click view switching. |
 | **Neural Memory Matrix** | Cognitive profile telemetry | User identity tag, biometric authentication status, activity logs, recent context snippet, and an animated gradient **Retention Index gauge**. |
 | **Hardware Telemetry** | Task manager style live monitor | Cyber grid with neon green (CPU), purple (RAM), and amber (GPU/VRAM) real-time wave graphs. |
 
@@ -318,12 +359,13 @@ Neura_test_ai/
 ├── test_screen_vision.py        # 14-test verification suite for Screen Vision, DPI scaling & cursor actions
 ├── test_semantic_screen_vision.py # Diagnostic layout tests for Google Search & YouTube UI landmarks
 ├── test_face_recognition.py     # Diagnostic verification and test suite for the biometric pipeline
+├── test_agents_system.py        # Multi-agent verification suite (testing, monitoring, skills, errors)
 ├── requirements.txt             # Project package dependencies
 ├── .env                         # Private API keys (Gemini, Groq)
 │
 ├── chat_bridge.json             # IPC bridge: chat message stream
 ├── input_bridge.json            # IPC bridge: queued UI commands
-├── status_bridge.json           # IPC bridge: live assistant state
+├── status_bridge.json           # IPC bridge: live assistant state & 3D office mode
 ├── auto_learn_bridge.json       # IPC bridge: unknown face auto-enrollment synchronization
 │
 ├── vision/                      # Biometric Face Recognition subsystem
@@ -343,7 +385,17 @@ Neura_test_ai/
 │   ├── personality.py           # Neura's fixed personality guidelines, tone, and behavioral directives
 │   ├── screen_vision.py         # Screen Vision engine: OCR, DPI scaling, semantic layouts & title picker
 │   ├── desktop_controller.py    # Desktop controller: browser window focus, link clicks, scrolling, typing
-│   └── file_manager.py          # File & folder discovery, fuzzy paths, and CRUD operations
+│   ├── file_manager.py          # File & folder discovery, fuzzy paths, and CRUD operations
+│   └── agents/                  # Multi-Agent personal AI subsystem
+│       ├── __init__.py          # Agent package exports & get_orchestrator singleton
+│       ├── orchestrator.py      # AgentOrchestrator central coordinator & task delegator
+│       ├── base_agent.py        # BaseAgent abstract class & lifecycle definitions
+│       ├── project_agent.py     # ProjectAgent: automated testing & diagnostics
+│       ├── screen_agent.py      # ScreenAgent: visual perception & terminal error inspection
+│       ├── monitor_agent.py     # MonitorAgent: background process & system resource monitoring
+│       ├── skill_agent.py       # SkillAgent: learned skills, automated pipelines & tool runner
+│       ├── task_manager.py      # TaskManager: lifecycle state engine & priority queuing
+│       └── events.py            # EventBus: non-blocking pub/sub messaging & notification queues
 │
 ├── memory/                      # 3-Tier persistent memory subsystem
 │   ├── memory_manager.py        # MemoryManager class handling facts, preferences, and session context
@@ -446,6 +498,12 @@ Run dedicated semantic layout tests for Google Search (search bar, filter tabs, 
 python test_semantic_screen_vision.py
 ```
 
+### 5. Testing the Multi-Agent Orchestration Subsystem
+Run the comprehensive test suite covering the `AgentOrchestrator`, `TaskManager` lifecycles, non-blocking `EventBus`, background monitoring, and agent delegation:
+```bash
+python test_agents_system.py
+```
+
 ---
 
 ## 🎮 Running Neura AI
@@ -471,6 +529,14 @@ Neura accepts commands via **Voice Speech**, **Typing into the HUD input box**, 
 
 | Action Category | Example Commands / Triggers | Action Triggered |
 | :--- | :--- | :--- |
+| **3D Agent Office (Show)** | *"Show the 3D visualization of the agent works"*, *"Show 3D visualization"*, *"Open 3D office"* | Switches Neura Optics panel to interactive 3D virtual office |
+| **3D Agent Office (Close)** | *"Close visualization"*, *"Close the visualization"*, *"Close that one"*, *"Show camera"* | Closes 3D office and restores live camera feed in Neura Optics |
+| **Project Codebase Testing** | *"Test my project"*, *"Run project tests"*, *"Inspect my project"* | ProjectAgent audits syntax, executes test runners, and reports health |
+| **Project Failure Diagnosis** | *"Why did my project fail"*, *"Investigate failure"*, *"Debug project"* | ProjectAgent analyzes stack traces, error causes, and proposed fixes |
+| **Agent Task Status** | *"What are you doing?"*, *"What tasks are running?"*, *"Agent status"* | Reports live status and active workloads across all agents |
+| **Background Monitoring** | *"Start monitoring task Server"*, *"Stop monitoring"* | MonitorAgent tracks background jobs and resource health |
+| **Screen Error Inspection** | *"Inspect screen for errors"*, *"Check screen errors"* | ScreenAgent scans screen for terminal tracebacks and compiler exceptions |
+| **Skill Learning & Run** | *"Learn skill Deploy to run deploy.bat"*, *"Run skill Deploy"* | SkillAgent registers, validates, and runs automated skill workflows |
 | **Screen Scene Vision** | *"What is currently open on my screen?"*, *"What's on my screen?"* | Analyzes active window, OCR elements, and summarizes visible UI landmarks |
 | **Search Result Links** | *"Open the second Google search result"*, *"Click the first link"*, *"Click the 2nd link"* | Focuses browser and clicks the clickable link title (strictly excluding descriptions) |
 | **Topic Link Opening** | *"Open the link about Python"*, *"Click link about YouTube"* | Identifies and clicks the link title matching the keyword on screen |

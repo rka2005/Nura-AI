@@ -190,7 +190,13 @@ def run_screen_vision_tests(live_click: bool = False):
         ("open the link about Python", IntentType.SCREEN_OPEN),
         ("what is this page about?", IntentType.SCREEN_DESCRIBE),
         ("scroll down and open the third result", IntentType.SCREEN_SCROLL),
-        ("scroll down", IntentType.SCREEN_SCROLL)
+        ("scroll down", IntentType.SCREEN_SCROLL),
+        ("what happens in the screen", IntentType.SCREEN_DESCRIBE),
+        ("what happens at the background", IntentType.SYSTEM_BACKGROUND_STATUS),
+        ("what is running in the background", IntentType.SYSTEM_BACKGROUND_STATUS),
+        ("what happens in the screen and at the background", IntentType.SYSTEM_SCREEN_AND_BACKGROUND_STATUS),
+        ("by taking screen permission i want to perform some tasks and ask what happens in the screen and at the backgroud. make setup all these", IntentType.SYSTEM_SCREEN_AND_BACKGROUND_STATUS),
+        ("take screen permission and open the first video", IntentType.SCREEN_OPEN)
     ]
     all_matched = True
     for phrase, expected in test_phrases:
@@ -198,7 +204,7 @@ def run_screen_vision_tests(live_click: bool = False):
         status = "✓" if intent == expected else "✗"
         if intent != expected:
             all_matched = False
-        print(f"  [{status}] '{phrase}' → {intent} (meta: {meta})")
+        print(f"  [{status}] '{phrase[:60]}' → {intent} (meta: {meta})")
 
     if all_matched:
         print("PASS: All Screen Vision query patterns routed accurately.\n")
@@ -208,10 +214,14 @@ def run_screen_vision_tests(live_click: bool = False):
     # =================================================================
     # Test 11: Desktop Controller Integration
     # =================================================================
-    print("─── [Test 11: Desktop Controller Screen Vision Methods] ───")
+    print("─── [Test 11: Desktop Controller Screen Vision & Background Methods] ───")
     controller_desc = controller.screen_describe()
     print(f"  Controller screen_describe: \"{controller_desc[:80]}...\"")
-    print("PASS: DesktopController wraps ScreenVision engine.\n")
+    bg_desc = controller.get_background_activity()
+    print(f"  Controller get_background_activity: \"{bg_desc[:80]}...\"")
+    dual_desc = controller.get_screen_and_background_activity()
+    print(f"  Controller get_screen_and_background_activity: \"{dual_desc[:80]}...\"")
+    print("PASS: DesktopController wraps ScreenVision and Background engines.\n")
 
     # =================================================================
     # Test 12: Full Diagnostics

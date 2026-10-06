@@ -23,7 +23,7 @@ gemini_model = None
 if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        for g_name in ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']:
+        for g_name in ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']:
             try:
                 gemini_model = genai.GenerativeModel(g_name)
                 break

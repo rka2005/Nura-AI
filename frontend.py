@@ -595,8 +595,40 @@ def fetch_chat_from_backend():
         pass
 
 
+OPTICS_SHOW_3D_OFFICE = False
+
+def set_optics_3d_office(show: bool):
+    global OPTICS_SHOW_3D_OFFICE
+    OPTICS_SHOW_3D_OFFICE = bool(show)
+    try:
+        data = {}
+        if os.path.exists(STATUS_BRIDGE_FILE):
+            try:
+                with open(STATUS_BRIDGE_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                data = {}
+        data["show_agent_office"] = OPTICS_SHOW_3D_OFFICE
+        temp_bridge = f"{STATUS_BRIDGE_FILE}.tmp"
+        with open(temp_bridge, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_bridge, STATUS_BRIDGE_FILE)
+    except Exception:
+        pass
+
+def toggle_optics_view_mode():
+    global OPTICS_SHOW_3D_OFFICE
+    set_optics_3d_office(not OPTICS_SHOW_3D_OFFICE)
+
+def sync_agent_office_states(agents_dict):
+    global AGENT_OFFICE_INSTANCE
+    if "AGENT_OFFICE_INSTANCE" in globals() and AGENT_OFFICE_INSTANCE:
+        AGENT_OFFICE_INSTANCE.sync_from_bridge(agents_dict)
+
 def update_assistant_status():
-    global ASSISTANT_STATUS, LAST_STATUS_CHECK
+    global ASSISTANT_STATUS, LAST_STATUS_CHECK, OPTICS_SHOW_3D_OFFICE
     now = time.time()
     if now - LAST_STATUS_CHECK < 0.2:
         return
@@ -607,6 +639,10 @@ def update_assistant_status():
                 data = json.load(f)
                 stat = data.get("status", "READY")
                 ASSISTANT_STATUS = stat
+                if "show_agent_office" in data:
+                    OPTICS_SHOW_3D_OFFICE = bool(data["show_agent_office"])
+                if "agents" in data and isinstance(data["agents"], dict):
+                    sync_agent_office_states(data["agents"])
         except Exception:
             pass
 
@@ -688,15 +724,16 @@ def draw_header_bar(surface):
         t_label = theme_font.render(theme_names[t_id], True, (240, 245, 255) if is_active else (160, 185, 215))
         surface.blit(t_label, (btn_rect.x + 16, btn_rect.y + 7))
 
-    # 4. Controls: MIC, CAM, BOLD, CLEAR
-    ctrl_x = WIDTH - 390
-    ctrl_btn_w = 64
+    # 4. Controls: MIC, CAM, 3D AGTS, BOLD, CLEAR
+    ctrl_x = WIDTH - 455
+    ctrl_btn_w = 58
     ctrl_btn_h = 24
-    ctrl_font = pygame.font.SysFont("consolas", 10, bold=True)
+    ctrl_font = pygame.font.SysFont("consolas", 9, bold=True)
 
     controls = [
         ("MIC", not MIC_MUTED, (80, 220, 120) if not MIC_MUTED else (255, 80, 80)),
         ("CAM", CAMERA_ENABLED, (80, 200, 255) if CAMERA_ENABLED else (140, 150, 170)),
+        ("3D AGTS", OPTICS_SHOW_3D_OFFICE, (0, 220, 255) if OPTICS_SHOW_3D_OFFICE else (120, 160, 200)),
         ("BOLD", ULTRA_BOLD, accent if ULTRA_BOLD else (130, 150, 180)),
         ("CLR", False, (220, 100, 120)),
     ]
@@ -727,14 +764,15 @@ def get_header_button_rects():
         for t_id in range(1, 5)
     ]
 
-    ctrl_x = WIDTH - 390
-    ctrl_btn_w = 64
+    ctrl_x = WIDTH - 455
+    ctrl_btn_w = 58
     ctrl_btn_h = 24
     ctrl_rects = {
         "MIC": pygame.Rect(ctrl_x + 0 * (ctrl_btn_w + 6), 14, ctrl_btn_w, ctrl_btn_h),
         "CAM": pygame.Rect(ctrl_x + 1 * (ctrl_btn_w + 6), 14, ctrl_btn_w, ctrl_btn_h),
-        "BOLD": pygame.Rect(ctrl_x + 2 * (ctrl_btn_w + 6), 14, ctrl_btn_w, ctrl_btn_h),
-        "CLR": pygame.Rect(ctrl_x + 3 * (ctrl_btn_w + 6), 14, ctrl_btn_w, ctrl_btn_h),
+        "3D": pygame.Rect(ctrl_x + 2 * (ctrl_btn_w + 6), 14, ctrl_btn_w, ctrl_btn_h),
+        "BOLD": pygame.Rect(ctrl_x + 3 * (ctrl_btn_w + 6), 14, ctrl_btn_w, ctrl_btn_h),
+        "CLR": pygame.Rect(ctrl_x + 4 * (ctrl_btn_w + 6), 14, ctrl_btn_w, ctrl_btn_h),
     }
     return theme_rects, ctrl_rects
 
@@ -1009,36 +1047,473 @@ def handle_user_input_submission():
     USER_INPUT_TEXT = ""
 
 
-# -------------------- OPTICS / CAMERA VIEW MODULE --------------------
-def draw_camera_panel(surface, t):
-    global CAMERA_SURFACE, CAMERA_ENABLED, CURRENT_FACE_LABEL, CURRENT_FACE_IS_OWNER, CURRENT_FACE_STATE, CURRENT_FACE_IDENTITY, face_system, is_learning_active
+# -------------------- 3D AGENT OFFICE & OPTICS MODULE --------------------
+class Agent3D:
+    def __init__(self, agent_id, name, short_name, dept, color, room_pos, idle_pos):
+        self.id = agent_id
+        self.name = name
+        self.short_name = short_name
+        self.dept = dept
+        self.color = color
+        self.room_pos = room_pos      # (wx, wy) Department workstation
+        self.idle_pos = idle_pos      # (wx, wy) Central hall lounge
+        self.x = float(idle_pos[0])
+        self.y = float(idle_pos[1])
+        self.target_x = float(idle_pos[0])
+        self.target_y = float(idle_pos[1])
+        self.status = "IDLE"          # "IDLE" or "BUSY"
+        self.task_desc = "STANDBY // READY"
+        self.progress = 0.0
+        self.speed = 85.0
+        self.bob_phase = random.random() * math.pi * 2
+        self.work_time = 0.0
+        self.particles = []
+
+    def set_busy(self, task_desc=""):
+        self.status = "BUSY"
+        self.task_desc = task_desc or "EXECUTING TASK"
+        self.target_x = float(self.room_pos[0])
+        self.target_y = float(self.room_pos[1])
+
+    def set_idle(self):
+        self.status = "IDLE"
+        self.task_desc = "STANDBY // READY"
+        self.target_x = float(self.idle_pos[0])
+        self.target_y = float(self.idle_pos[1])
+
+    def update(self, dt_sec):
+        dx = self.target_x - self.x
+        dy = self.target_y - self.y
+        dist = math.hypot(dx, dy)
+        is_moving = dist > 1.2
+        if is_moving:
+            step = min(dist, self.speed * dt_sec)
+            self.x += (dx / dist) * step
+            self.y += (dy / dist) * step
+            self.bob_phase += dt_sec * 12.0
+        else:
+            self.x = self.target_x
+            self.y = self.target_y
+            self.bob_phase += dt_sec * 3.5
+
+        if self.status == "BUSY":
+            self.work_time += dt_sec
+            self.progress = (self.progress + dt_sec * 0.15) % 1.0
+            if not is_moving and random.random() < 0.35:
+                self.particles.append([
+                    self.x + (random.random() - 0.5) * 8.0,
+                    self.y + (random.random() - 0.5) * 8.0,
+                    6.0 + random.random() * 4.0,
+                    (random.random() - 0.5) * 12.0,
+                    (random.random() - 0.5) * 12.0,
+                    10.0 + random.random() * 15.0,
+                    0.0,
+                    0.4 + random.random() * 0.3,
+                    self.color
+                ])
+
+        surviving = []
+        for p in self.particles:
+            p[6] += dt_sec
+            if p[6] < p[7]:
+                p[0] += p[3] * dt_sec
+                p[1] += p[4] * dt_sec
+                p[2] += p[5] * dt_sec
+                surviving.append(p)
+        self.particles = surviving
+
+
+class AgentOffice3D:
+    def __init__(self):
+        self.agents = {
+            "project_tester": Agent3D(
+                agent_id="project_tester",
+                name="PROJECT_TESTER",
+                short_name="TESTER",
+                dept="QA & DIAGNOSTICS",
+                color=(0, 230, 255),
+                room_pos=(-68, -24),
+                idle_pos=(-22, -10)
+            ),
+            "screen_vision": Agent3D(
+                agent_id="screen_vision",
+                name="SCREEN_VISION",
+                short_name="VISION",
+                dept="VISUAL INSPECT",
+                color=(255, 75, 190),
+                room_pos=(24, -68),
+                idle_pos=(14, -14)
+            ),
+            "system_monitor": Agent3D(
+                agent_id="system_monitor",
+                name="SYS_MONITOR",
+                short_name="MONITOR",
+                dept="SYS & OPS",
+                color=(60, 255, 150),
+                room_pos=(-24, 68),
+                idle_pos=(-14, 14)
+            ),
+            "skill_runner": Agent3D(
+                agent_id="skill_runner",
+                name="SKILL_RUNNER",
+                short_name="SKILLS",
+                dept="EXEC & TOOLS",
+                color=(255, 190, 45),
+                room_pos=(68, 24),
+                idle_pos=(22, 10)
+            ),
+        }
+        self.demo_mode = False
+        self.demo_timer = 0.0
+        self.demo_phase = 0
+        self.selected_agent = "project_tester"
+        self.demo_btn_rect = pygame.Rect(0, 0, 0, 0)
+        self.reset_btn_rect = pygame.Rect(0, 0, 0, 0)
+        self.cached_fonts = {}
+
+    def get_font(self, size, bold=False):
+        key = (size, bold)
+        if key not in self.cached_fonts:
+            self.cached_fonts[key] = pygame.font.SysFont("consolas", size, bold=bold)
+        return self.cached_fonts[key]
+
+    def sync_from_bridge(self, agents_dict):
+        if not agents_dict or not isinstance(agents_dict, dict) or self.demo_mode:
+            return
+
+        # Bridge key normalization
+        alias_map = {
+            "project_tester": ["project_tester", "ProjectAgent", "project"],
+            "screen_vision": ["screen_vision", "ScreenAgent", "vision"],
+            "system_monitor": ["system_monitor", "MonitorAgent", "monitor"],
+            "skill_runner": ["skill_runner", "SkillAgent", "task_delegator", "skills"],
+        }
+
+        for aid, aobj in self.agents.items():
+            possible_keys = alias_map.get(aid, [aid])
+            back_data = None
+            for pk in possible_keys:
+                if pk in agents_dict and isinstance(agents_dict[pk], dict):
+                    back_data = agents_dict[pk]
+                    break
+
+            if back_data:
+                b_status = str(back_data.get("status", "")).lower()
+                b_task = back_data.get("current_task") or back_data.get("task") or ""
+                if b_status in ["busy", "running", "working", "testing", "inspecting"]:
+                    aobj.set_busy(b_task or f"Active: {b_status.upper()}")
+                elif b_status in ["idle", "stopped", "completed", "ready"]:
+                    aobj.set_idle()
+
+    def update_demo_cycle(self, dt_sec):
+        if not self.demo_mode:
+            return
+        self.demo_timer += dt_sec
+        if self.demo_timer >= 3.6:
+            self.demo_timer = 0.0
+            self.demo_phase = (self.demo_phase + 1) % 8
+            p = self.demo_phase
+            if p == 0:
+                self.agents["project_tester"].set_busy("Auditing code syntax & tests")
+            elif p == 1:
+                self.agents["screen_vision"].set_busy("Scanning viewport & UI elements")
+            elif p == 2:
+                self.agents["system_monitor"].set_busy("Logging process memory & CPU load")
+            elif p == 3:
+                self.agents["skill_runner"].set_busy("Executing tool automated pipeline")
+            elif p == 4:
+                pass
+            elif p == 5:
+                self.agents["project_tester"].set_idle()
+            elif p == 6:
+                self.agents["screen_vision"].set_idle()
+            elif p == 7:
+                self.agents["system_monitor"].set_idle()
+                self.agents["skill_runner"].set_idle()
+
+    def draw(self, surface, inner_rect, t, dt=16.0):
+        dt_sec = max(0.001, min(0.1, dt * 0.001))
+        self.update_demo_cycle(dt_sec)
+        for a in self.agents.values():
+            a.update(dt_sec)
+
+        prev_clip = surface.get_clip()
+        surface.set_clip(inner_rect)
+
+        # 1. Background Grid
+        surface.fill((8, 14, 28), inner_rect)
+        for gx in range(inner_rect.x, inner_rect.right, 24):
+            pygame.draw.line(surface, (13, 22, 42), (gx, inner_rect.y), (gx, inner_rect.bottom), 1)
+        for gy in range(inner_rect.y, inner_rect.bottom, 24):
+            pygame.draw.line(surface, (13, 22, 42), (inner_rect.x, gy), (inner_rect.right, gy), 1)
+
+        ox = inner_rect.centerx
+        oy = inner_rect.centery + 10
+        scale_x = min(0.95, max(0.58, inner_rect.width / 420.0))
+        scale_y = scale_x * 0.48
+        scale_z = scale_x * 0.82
+
+        def world_to_screen(wx, wy, wz=0.0):
+            sx = ox + (wx - wy) * 0.866 * scale_x
+            sy = oy + (wx + wy) * 0.500 * scale_y - wz * scale_z
+            return int(sx), int(sy)
+
+        # 2. Corridors & animated conduit rails
+        corridors = [
+            ((-22, -10), (-68, -24), (0, 220, 255)),
+            ((14, -14), (24, -68), (255, 75, 190)),
+            ((-14, 14), (-24, 68), (60, 255, 150)),
+            ((22, 10), (68, 24), (255, 190, 45)),
+        ]
+        pulse_t = (t * 0.0015) % 1.0
+        for (sx0, sy0), (ex0, ey0), col in corridors:
+            p1 = world_to_screen(sx0, sy0)
+            p2 = world_to_screen(ex0, ey0)
+            pygame.draw.line(surface, (20, 42, 78), p1, p2, 2)
+            # Animated energy bead
+            bwx = sx0 + (ex0 - sx0) * pulse_t
+            bwy = sy0 + (ey0 - sy0) * pulse_t
+            bx, by = world_to_screen(bwx, bwy)
+            pygame.draw.circle(surface, col, (bx, by), 2)
+
+        # 3. Central Hall Lounge Platform
+        hall_pts = [
+            world_to_screen(-36, -36),
+            world_to_screen(36, -36),
+            world_to_screen(36, 36),
+            world_to_screen(-36, 36),
+        ]
+        pygame.draw.polygon(surface, (12, 24, 48), hall_pts)
+        pygame.draw.polygon(surface, (36, 68, 120), hall_pts, 1)
+
+        # Central Hologram Hub Pedestal
+        hub_pts = [
+            world_to_screen(-12, -12),
+            world_to_screen(12, -12),
+            world_to_screen(12, 12),
+            world_to_screen(-12, 12),
+        ]
+        pygame.draw.polygon(surface, (18, 38, 72), hub_pts)
+        hcx, hcy = world_to_screen(0, 0)
+        h_pulse = int(5 + math.sin(t * 0.006) * 2)
+        pygame.draw.circle(surface, (0, 200, 255), (hcx, hcy), max(2, h_pulse), 1)
+
+        font_label = self.get_font(8, bold=True)
+        lbl_hall = font_label.render("CENTRAL HALL", True, (90, 140, 190))
+        surface.blit(lbl_hall, lbl_hall.get_rect(center=(hcx, hcy - 12)))
+
+        # 4. Department Rooms
+        rooms = [
+            ("project_tester", (-68, -24), "QA LAB", (0, 220, 255), (10, 28, 50)),
+            ("screen_vision", (24, -68), "VISION LAB", (255, 75, 190), (32, 14, 40)),
+            ("system_monitor", (-24, 68), "OPS CTR", (60, 255, 150), (12, 34, 24)),
+            ("skill_runner", (68, 24), "TOOL BAY", (255, 190, 45), (34, 28, 14)),
+        ]
+        for aid, (rx, ry), rname, rcol, rbg in rooms:
+            rad = 16
+            r_pts = [
+                world_to_screen(rx - rad, ry - rad),
+                world_to_screen(rx + rad, ry - rad),
+                world_to_screen(rx + rad, ry + rad),
+                world_to_screen(rx - rad, ry + rad),
+            ]
+            pygame.draw.polygon(surface, rbg, r_pts)
+            pygame.draw.polygon(surface, rcol, r_pts, 1)
+
+            # Center workstation desk
+            dsx, dsy = world_to_screen(rx, ry)
+            pygame.draw.rect(surface, (18, 32, 56), (dsx - 8, dsy - 8, 16, 8), border_radius=2)
+            pygame.draw.rect(surface, rcol, (dsx - 8, dsy - 8, 16, 8), 1, border_radius=2)
+
+            # Holographic equipment icons
+            if aid == "project_tester":
+                pygame.draw.rect(surface, rcol, (dsx - 7, dsy - 13, 6, 4))
+                pygame.draw.rect(surface, (0, 180, 220), (dsx + 1, dsy - 13, 6, 4))
+            elif aid == "screen_vision":
+                pygame.draw.circle(surface, rcol, (dsx, dsy - 11), 3, 1)
+                pygame.draw.circle(surface, (255, 230, 255), (dsx, dsy - 11), 1)
+            elif aid == "system_monitor":
+                pygame.draw.rect(surface, (12, 40, 25), (dsx - 6, dsy - 14, 12, 10), border_radius=1)
+                pygame.draw.line(surface, rcol, (dsx - 4, dsy - 11), (dsx + 4, dsy - 11), 1)
+                pygame.draw.line(surface, rcol, (dsx - 4, dsy - 7), (dsx + 4, dsy - 7), 1)
+            else:
+                pygame.draw.circle(surface, rcol, (dsx, dsy - 11), 3, 1)
+
+            # Overhead Department Name Tag
+            rtag = font_label.render(rname, True, rcol)
+            surface.blit(rtag, rtag.get_rect(center=(dsx, dsy + 12)))
+
+        # 5. Draw Agents sorted by depth
+        sorted_agents = sorted(self.agents.values(), key=lambda a: a.x + a.y)
+        for a in sorted_agents:
+            dist = math.hypot(a.target_x - a.x, a.target_y - a.y)
+            is_moving = dist > 1.2
+            bob_z = math.sin(a.bob_phase) * (2.4 if is_moving else 0.8)
+
+            gx, gy = world_to_screen(a.x, a.y, wz=0)
+            sx, sy = world_to_screen(a.x, a.y, wz=bob_z)
+
+            # Ground shadow
+            pygame.draw.ellipse(surface, (4, 8, 16), pygame.Rect(gx - 7, gy - 3, 14, 6))
+
+            # Render active particles
+            for p in a.particles:
+                px, py = world_to_screen(p[0], p[1], wz=p[2])
+                pygame.draw.circle(surface, p[8], (px, py), 2)
+
+            # Cyber Body Capsule
+            body_rect = pygame.Rect(sx - 6, sy - 14, 12, 13)
+            pygame.draw.rect(surface, (14, 22, 38), body_rect, border_radius=4)
+            pygame.draw.rect(surface, a.color if a.status == "BUSY" else (70, 95, 135), body_rect, 1, border_radius=4)
+
+            # Visor
+            visor_col = a.color if a.status == "BUSY" else (160, 200, 240)
+            pygame.draw.line(surface, visor_col, (sx - 4, sy - 10), (sx + 4, sy - 10), 2)
+
+            # Halo Beacon
+            halo_y = sy - 18
+            if a.status == "BUSY":
+                pulse_r = 3 + int((math.sin(t * 0.01) + 1.0) * 1.5)
+                pygame.draw.circle(surface, a.color, (sx, halo_y), pulse_r, 1)
+                pygame.draw.circle(surface, (255, 255, 255), (sx, halo_y), 1)
+            else:
+                pygame.draw.circle(surface, (90, 130, 175), (sx, halo_y), 3, 1)
+
+            # Overhead Status Tag
+            tag_font = self.get_font(8, bold=True)
+            name_tag = tag_font.render(a.short_name, True, (240, 248, 255))
+            stat_tag = tag_font.render("[BUSY]" if a.status == "BUSY" else "[IDLE]", True, a.color if a.status == "BUSY" else (120, 150, 180))
+            tag_w = max(name_tag.get_width(), stat_tag.get_width()) + 6
+            tag_h = 17
+            tag_bg = pygame.Rect(sx - tag_w // 2, sy - 38, tag_w, tag_h)
+            pygame.draw.rect(surface, (10, 16, 30), tag_bg, border_radius=3)
+            pygame.draw.rect(surface, a.color if a.status == "BUSY" else (40, 60, 90), tag_bg, 1, border_radius=3)
+            surface.blit(name_tag, (sx - name_tag.get_width() // 2, sy - 37))
+            surface.blit(stat_tag, (sx - stat_tag.get_width() // 2, sy - 28))
+
+            # Selection Highlight
+            if self.selected_agent == a.id:
+                pygame.draw.rect(surface, (255, 255, 100), pygame.Rect(sx - 10, sy - 20, 20, 24), 1, border_radius=4)
+
+        # 6. Mini Controls inside inner_rect
+        mpos = pygame.mouse.get_pos()
+
+        # Demo Button
+        demo_rect = pygame.Rect(inner_rect.x + 6, inner_rect.y + 6, 68, 16)
+        self.demo_btn_rect = demo_rect
+        is_demo_hov = demo_rect.collidepoint(mpos)
+        demo_fill = (0, 75, 115) if self.demo_mode else ((24, 40, 70) if is_demo_hov else (14, 24, 44))
+        pygame.draw.rect(surface, demo_fill, demo_rect, border_radius=3)
+        pygame.draw.rect(surface, (0, 220, 255) if self.demo_mode else (45, 75, 120), demo_rect, 1, border_radius=3)
+        demo_txt = self.get_font(8, bold=True).render("DEMO: ON" if self.demo_mode else "DEMO: OFF", True, (255, 255, 255) if self.demo_mode else (170, 200, 230))
+        surface.blit(demo_txt, demo_txt.get_rect(center=demo_rect.center))
+
+        # Reset Button
+        reset_rect = pygame.Rect(inner_rect.x + 78, inner_rect.y + 6, 52, 16)
+        self.reset_btn_rect = reset_rect
+        is_reset_hov = reset_rect.collidepoint(mpos)
+        pygame.draw.rect(surface, (30, 40, 65) if is_reset_hov else (14, 22, 38), reset_rect, border_radius=3)
+        pygame.draw.rect(surface, (45, 75, 120), reset_rect, 1, border_radius=3)
+        reset_txt = self.get_font(8, bold=True).render("RESET", True, (160, 185, 215))
+        surface.blit(reset_txt, reset_txt.get_rect(center=reset_rect.center))
+
+        # Active Agents Count
+        busy_count = sum(1 for a in self.agents.values() if a.status == "BUSY")
+        mode_chip = self.get_font(8, bold=True).render(f"ACTIVE: {busy_count}/4", True, (0, 255, 160) if busy_count > 0 else (120, 150, 180))
+        surface.blit(mode_chip, (inner_rect.right - mode_chip.get_width() - 8, inner_rect.y + 8))
+
+        # 7. Bottom Telemetry Banner
+        bot_rect = pygame.Rect(inner_rect.x + 4, inner_rect.bottom - 18, inner_rect.width - 8, 15)
+        pygame.draw.rect(surface, (10, 17, 34, 220), bot_rect, border_radius=3)
+        pygame.draw.rect(surface, (28, 48, 85), bot_rect, 1, border_radius=3)
+        sel_agent = self.agents.get(self.selected_agent, self.agents["project_tester"])
+        telemetry_str = f"{sel_agent.name} [{sel_agent.status}]: {sel_agent.task_desc}"[:46]
+        bot_txt = self.get_font(8, bold=True).render(telemetry_str, True, sel_agent.color if sel_agent.status == "BUSY" else (160, 190, 220))
+        surface.blit(bot_txt, (bot_rect.x + 6, bot_rect.y + 2))
+
+        surface.set_clip(prev_clip)
+
+    def handle_click(self, mpos, inner_rect):
+        if self.demo_btn_rect.collidepoint(mpos):
+            self.demo_mode = not self.demo_mode
+            self.demo_timer = 0.0
+            self.demo_phase = 0
+            if self.demo_mode:
+                self.agents["project_tester"].set_busy("Simulated Codebase Test")
+            else:
+                for a in self.agents.values():
+                    a.set_idle()
+            return True
+
+        if self.reset_btn_rect.collidepoint(mpos):
+            self.demo_mode = False
+            for a in self.agents.values():
+                a.set_idle()
+            return True
+
+        ox = inner_rect.centerx
+        oy = inner_rect.centery + 10
+        scale_x = min(0.95, max(0.58, inner_rect.width / 420.0))
+        scale_y = scale_x * 0.48
+        scale_z = scale_x * 0.82
+
+        def world_to_screen(wx, wy, wz=0.0):
+            sx = ox + (wx - wy) * 0.866 * scale_x
+            sy = oy + (wx + wy) * 0.500 * scale_y - wz * scale_z
+            return int(sx), int(sy)
+
+        for aid, a in self.agents.items():
+            sx, sy = world_to_screen(a.x, a.y)
+            if math.hypot(mpos[0] - sx, mpos[1] - sy) < 22:
+                self.selected_agent = aid
+                return True
+
+        room_coords = {
+            "project_tester": (-68, -24),
+            "screen_vision": (24, -68),
+            "system_monitor": (-24, 68),
+            "skill_runner": (68, 24),
+        }
+        for aid, (rx, ry) in room_coords.items():
+            rsx, rsy = world_to_screen(rx, ry)
+            if math.hypot(mpos[0] - rsx, mpos[1] - rsy) < 20:
+                self.selected_agent = aid
+                return True
+
+        return False
+
+
+AGENT_OFFICE_INSTANCE = AgentOffice3D()
+
+
+def get_optics_toggle_button_rect():
     panel_rect = LAYOUT["cam_panel"]
+    return pygame.Rect(panel_rect.right - 92, panel_rect.y + 6, 82, 18)
 
-    owner_name = (face_system.owner_profile.get("name") if face_system and hasattr(face_system, "owner_profile") else "ROHIT").upper()
 
-    if not CAMERA_ENABLED:
-        accent = (140, 150, 170)
-        badge = "STANDBY"
-    elif is_learning_active:
-        accent = (255, 180, 60)
-        badge = "ENROLLING ● LIVE"
-    elif CURRENT_FACE_IS_OWNER:
-        accent = (0, 255, 120)
-        badge = f"{owner_name} VERIFIED ● LIVE"
-    elif CURRENT_FACE_STATE == FACE_STATE_GUEST_PRESENT:
-        accent = (0, 220, 255)
-        badge = f"{CURRENT_FACE_IDENTITY.upper()} ● LIVE"
-    elif CURRENT_FACE_STATE == FACE_STATE_UNKNOWN:
-        accent = (255, 60, 60)
-        badge = "UNKNOWN TARGET ● LIVE"
-    elif CURRENT_FACE_STATE == FACE_STATE_NO_FACE:
-        accent = (255, 100, 100)
-        badge = "NO TARGET ● LIVE"
-    else:
-        accent = (0, 200, 255)
-        badge = "SCANNING ● LIVE"
+def handle_optics_panel_click(mpos):
+    global OPTICS_SHOW_3D_OFFICE, AGENT_OFFICE_INSTANCE
+    toggle_rect = get_optics_toggle_button_rect()
+    if toggle_rect.collidepoint(mpos):
+        toggle_optics_view_mode()
+        return True
 
-    draw_glass_panel(surface, panel_rect, "NEURA OPTICS // SCANNER", accent, badge)
+    if OPTICS_SHOW_3D_OFFICE and AGENT_OFFICE_INSTANCE:
+        panel_rect = LAYOUT["cam_panel"]
+        cam_inner_x = panel_rect.x + 8
+        cam_inner_y = panel_rect.y + 28
+        cam_inner_w = panel_rect.width - 16
+        cam_inner_h = panel_rect.height - 36
+        inner_rect = pygame.Rect(cam_inner_x, cam_inner_y, cam_inner_w, cam_inner_h)
+        if inner_rect.collidepoint(mpos):
+            return AGENT_OFFICE_INSTANCE.handle_click(mpos, inner_rect)
+    return False
+
+
+# -------------------- OPTICS / CAMERA VIEW MODULE --------------------
+def draw_camera_panel(surface, t, dt=16.0):
+    global CAMERA_SURFACE, CAMERA_ENABLED, CURRENT_FACE_LABEL, CURRENT_FACE_IS_OWNER, CURRENT_FACE_STATE, CURRENT_FACE_IDENTITY, face_system, is_learning_active, OPTICS_SHOW_3D_OFFICE, AGENT_OFFICE_INSTANCE
+    panel_rect = LAYOUT["cam_panel"]
 
     cam_inner_x = panel_rect.x + 8
     cam_inner_y = panel_rect.y + 28
@@ -1046,16 +1521,70 @@ def draw_camera_panel(surface, t):
     cam_inner_h = panel_rect.height - 36
     inner_rect = pygame.Rect(cam_inner_x, cam_inner_y, cam_inner_w, cam_inner_h)
 
+    mpos = pygame.mouse.get_pos()
+    toggle_rect = get_optics_toggle_button_rect()
+    is_hov_toggle = toggle_rect.collidepoint(mpos)
+
+    # 3D Agent Office View Mode
+    if OPTICS_SHOW_3D_OFFICE:
+        accent = (0, 220, 255)
+        draw_glass_panel(surface, panel_rect, "NEURA OPTICS // 3D AGENTS", accent, None)
+
+        # Header Toggle Button to switch back to Camera
+        t_fill = (0, 70, 110) if is_hov_toggle else (12, 32, 58)
+        pygame.draw.rect(surface, t_fill, toggle_rect, border_radius=4)
+        pygame.draw.rect(surface, (0, 220, 255) if is_hov_toggle else (35, 80, 130), toggle_rect, 1, border_radius=4)
+        font_btn = pygame.font.SysFont("consolas", 8, bold=True)
+        lbl = font_btn.render("► CAM VIEW", True, (240, 250, 255) if is_hov_toggle else (180, 220, 255))
+        surface.blit(lbl, lbl.get_rect(center=toggle_rect.center))
+
+        if AGENT_OFFICE_INSTANCE:
+            AGENT_OFFICE_INSTANCE.draw(surface, inner_rect, t, dt)
+        return
+
+    # Standard Camera Scanner View Mode
+    owner_name = (face_system.owner_profile.get("name") if face_system and hasattr(face_system, "owner_profile") else "ROHIT").upper()
+
+    if not CAMERA_ENABLED:
+        accent = (140, 150, 170)
+        badge = "STANDBY"
+    elif is_learning_active:
+        accent = (255, 180, 60)
+        badge = "ENROLLING"
+    elif CURRENT_FACE_IS_OWNER:
+        accent = (0, 255, 120)
+        badge = f"{owner_name} VERIFIED"
+    elif CURRENT_FACE_STATE == FACE_STATE_GUEST_PRESENT:
+        accent = (0, 220, 255)
+        badge = f"{CURRENT_FACE_IDENTITY.upper()}"
+    elif CURRENT_FACE_STATE == FACE_STATE_UNKNOWN:
+        accent = (255, 60, 60)
+        badge = "UNKNOWN"
+    elif CURRENT_FACE_STATE == FACE_STATE_NO_FACE:
+        accent = (255, 100, 100)
+        badge = "NO TARGET"
+    else:
+        accent = (0, 200, 255)
+        badge = "SCANNING"
+
+    draw_glass_panel(surface, panel_rect, "NEURA OPTICS // SCANNER", accent, None)
+
+    # Header Toggle Button to switch to 3D Office
+    t_fill = (24, 45, 80) if is_hov_toggle else (12, 24, 44)
+    pygame.draw.rect(surface, t_fill, toggle_rect, border_radius=4)
+    pygame.draw.rect(surface, (0, 220, 255) if is_hov_toggle else (35, 65, 105), toggle_rect, 1, border_radius=4)
+    font_btn = pygame.font.SysFont("consolas", 8, bold=True)
+    lbl = font_btn.render("► 3D AGENTS", True, (0, 230, 255) if is_hov_toggle else (160, 200, 235))
+    surface.blit(lbl, lbl.get_rect(center=toggle_rect.center))
+
     if CAMERA_ENABLED and CAMERA_SURFACE is not None:
         scaled = pygame.transform.scale(CAMERA_SURFACE, (cam_inner_w, cam_inner_h))
         surface.blit(scaled, (cam_inner_x, cam_inner_y))
 
-        # Thin tech border
         pygame.draw.rect(surface, accent, inner_rect, 1, border_radius=3)
 
-        # Tech telemetry text
         font_tech = pygame.font.SysFont("consolas", 8, bold=True)
-        surface.blit(font_tech.render("FOV 84° // BIOMETRIC HUD", True, accent), (cam_inner_x + 6, cam_inner_y + 4))
+        surface.blit(font_tech.render(f"FOV 84° // {badge}", True, accent), (cam_inner_x + 6, cam_inner_y + 4))
 
         if CURRENT_FACE_IS_OWNER:
             status_col = (0, 255, 120)
@@ -1812,6 +2341,8 @@ def main():
                         MIC_MUTED = not MIC_MUTED
                     elif ctrl_rects["CAM"].collidepoint(mpos):
                         CAMERA_ENABLED = not CAMERA_ENABLED
+                    elif "3D" in ctrl_rects and ctrl_rects["3D"].collidepoint(mpos):
+                        toggle_optics_view_mode()
                     elif ctrl_rects["BOLD"].collidepoint(mpos):
                         ULTRA_BOLD = not ULTRA_BOLD
                     elif ctrl_rects["CLR"].collidepoint(mpos):
@@ -1832,6 +2363,10 @@ def main():
                     else:
                         if not LAYOUT["chat_panel"].collidepoint(mpos):
                             INPUT_ACTIVE = True
+
+                    # 4. Optics Camera / 3D Visualization panel click interactions
+                    if LAYOUT["cam_panel"].collidepoint(mpos):
+                        handle_optics_panel_click(mpos)
 
                 elif event.type == pygame.MOUSEWHEEL:
                     mx, my = pygame.mouse.get_pos()
@@ -1935,7 +2470,7 @@ def main():
             draw_input_box(screen)
 
             # Right Column (Vision, Memory, Performance)
-            draw_camera_panel(screen, t)
+            draw_camera_panel(screen, t, dt)
             draw_memory_panel(screen)
             draw_performance_panel(screen)
 

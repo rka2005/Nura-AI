@@ -182,6 +182,7 @@ class ScreenVision:
 
     def get_active_window_info(self) -> Dict[str, str]:
         """Detects the foreground window title and associated application."""
+        self._ensure_input_desktop()
         app_name = "Desktop"
         title = ""
         try:
@@ -193,7 +194,9 @@ class ScreenVision:
 
             # Infer application name
             t_lower = title.lower()
-            if "chrome" in t_lower:
+            if "brave" in t_lower:
+                app_name = "Brave Browser"
+            elif "chrome" in t_lower:
                 app_name = "Google Chrome"
             elif "edge" in t_lower:
                 app_name = "Microsoft Edge"
@@ -201,10 +204,14 @@ class ScreenVision:
                 app_name = "Mozilla Firefox"
             elif "youtube" in t_lower:
                 app_name = "YouTube"
+            elif "antigravity" in t_lower:
+                app_name = "Antigravity IDE"
             elif "code" in t_lower:
                 app_name = "Visual Studio Code"
             elif "notepad" in t_lower:
                 app_name = "Notepad"
+            elif "calculator" in t_lower:
+                app_name = "Calculator"
             elif "excel" in t_lower:
                 app_name = "Microsoft Excel"
             elif "word" in t_lower:
@@ -1363,16 +1370,40 @@ class ScreenVision:
         ctx = self.analyze_screen(force_refresh=True)
         app = ctx.get("application", "Desktop")
         title = ctx.get("window_title", "Active Screen")
+        page_type = ctx.get("page_type", "general")
         elements = ctx.get("elements", [])
 
         if not elements:
-            return f"You currently have {app} open ('{title}'). No text could be extracted from the active window."
+            return f"Currently on your screen: {app} is in the foreground with window title '{title}'. No visible text could be captured."
 
-        # Extract major headlines and content
-        top_lines = [e["text"] for e in elements[:6] if len(e["text"].split()) >= 2]
-        headlines = "; ".join(top_lines) if top_lines else "standard interface buttons and icons"
+        # Extract semantic elements
+        video_titles = [e["text"] for e in elements if e.get("semantic_type") == "video_title"]
+        link_titles = [e["text"] for e in elements if e.get("semantic_type") == "link_title"]
+        tabs = [e.get("semantic_details", {}).get("tab_name", e["text"]) for e in elements if e.get("semantic_type") == "tab"]
+        tabs = list(dict.fromkeys(tabs))[:5]
 
-        return f"Currently on your screen: {app} is open with title '{title}'. Visible items include: {headlines}."
+        if page_type == "youtube":
+            if video_titles:
+                sample_videos = " | ".join(f"'{v}'" for v in video_titles[:3])
+                desc = f"Currently on your screen: YouTube is active ({app} - '{title}'). Showing videos including: {sample_videos}."
+                if tabs:
+                    desc += f" Filter tabs: {', '.join(tabs[:4])}."
+                return desc
+            return f"Currently on your screen: YouTube is active ({app} - '{title}') with {len(elements)} elements detected."
+
+        elif page_type == "google_search":
+            if link_titles:
+                sample_links = " | ".join(f"'{l}'" for l in link_titles[:3])
+                desc = f"Currently on your screen: Google Search is open in {app} ('{title}'). Top search results include: {sample_links}."
+                if tabs:
+                    desc += f" Search tabs: {', '.join(tabs[:4])}."
+                return desc
+            return f"Currently on your screen: Google Search is open in {app} ('{title}')."
+
+        # General application / desktop
+        prominent_lines = [e["text"] for e in elements if len(e["text"].split()) >= 2 and not e["text"].startswith("http")]
+        sample = "; ".join(prominent_lines[:4]) if prominent_lines else "standard interface elements"
+        return f"Currently on your screen: {app} is in the foreground with title '{title}'. Visible items include: {sample}. Total of {len(elements)} interactive screen elements detected."
 
     # ================================================================
     #  CONVENIENCE API METHODS
