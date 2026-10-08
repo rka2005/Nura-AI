@@ -393,10 +393,11 @@ class ProjectAgent(BaseAgent):
                     cmd,
                     cwd=root_dir,
                     capture_output=True,
-                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=15,
                 )
-                stdout = proc.stdout + proc.stderr
+                stdout = (proc.stdout or "") + (proc.stderr or "")
                 is_success = (proc.returncode == 0)
 
                 if is_success:

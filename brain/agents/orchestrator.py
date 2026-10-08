@@ -14,6 +14,12 @@ from brain.agents.project_agent import ProjectAgent
 from brain.agents.screen_agent import ScreenAgent
 from brain.agents.monitor_agent import MonitorAgent
 from brain.agents.skill_agent import SkillAgent
+from brain.agents.context_memory_agent import ContextMemoryAgent
+from brain.agents.computer_use_agent import ComputerUseAgent
+from brain.agents.security_scanner import VulnerabilityScanner
+from brain.agents.error_auditor import ErrorAuditor
+from brain.notification_service import NotificationService
+from brain.report_doc_generator import ReportDocGenerator
 
 class AgentOrchestrator:
     """
@@ -46,6 +52,22 @@ class AgentOrchestrator:
             event_bus=self.event_bus,
             task_manager=self.task_manager,
         )
+        self.memory_agent = ContextMemoryAgent(
+            context_memory_dir=os.path.join(self.workspace, ".agents", "context_memory"),
+            event_bus=self.event_bus,
+            task_manager=self.task_manager,
+        )
+
+        # New Computer Use, Security Auditing, Error Logging & Report Generation Subsystems
+        self.computer_use_agent = ComputerUseAgent(
+            desktop_ctrl=self.screen_agent.desktop_ctrl,
+            event_bus=self.event_bus,
+            task_manager=self.task_manager,
+        )
+        self.security_scanner = VulnerabilityScanner(workspace=self.workspace)
+        self.error_auditor = ErrorAuditor(workspace=self.workspace)
+        self.notification_service = NotificationService(memory_mgr=None)
+        self.report_generator = ReportDocGenerator(workspace=self.workspace)
 
         self._lock = threading.RLock()
         self._proactive_listener_active = True
@@ -248,8 +270,10 @@ class AgentOrchestrator:
         agents_map = {
             "ProjectAgent": (self.project_agent, "Code & Architecture"),
             "ScreenAgent": (self.screen_agent, "Vision & Screen Control"),
+            "ComputerUseAgent": (self.computer_use_agent, "Full Screen Autonomous Control"),
             "MonitorAgent": (self.monitor_agent, "System & Process Monitoring"),
             "SkillAgent": (self.skill_agent, "Domain Skills & Tools"),
+            "MemoryAgent": (self.memory_agent, "Dual-Tier Context & Knowledge"),
         }
         res = {}
         for key, (agent, role) in agents_map.items():
@@ -266,6 +290,167 @@ class AgentOrchestrator:
                 "task": curr_task,
             }
         return res
+
+    # -------------------------------------------------------------
+    # 7. Autonomous Full-Screen Computer Use Workflow
+    # -------------------------------------------------------------
+    def execute_computer_use(self, goal: str, max_steps: int = 8) -> str:
+        """
+        Coordinates full-screen autonomous computer use like Gemini / Claude:
+        Perceives screen, plans next actions, operates mouse/keyboard, and verifies state.
+        """
+        task = self.task_manager.create_task(
+            task_type="computer_use",
+            description=f"Autonomous Computer Use: {goal}",
+            assigned_agents=["ComputerUseAgent", "ScreenAgent"],
+            required_permission=PermissionLevel.EXECUTE,
+            metadata={"goal": goal, "max_steps": max_steps},
+        )
+        res = self.computer_use_agent.run_safe(task)
+        msg = res.get("message") or f"Executed computer use task '{goal}'."
+        return msg
+
+    # -------------------------------------------------------------
+    # 8. Automated Project Vulnerability Scanning Workflow
+    # -------------------------------------------------------------
+    def scan_project_vulnerabilities(self, target_dir: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Runs SAST security scanning for secrets, SQLi, command injection,
+        broken crypto, deserialization, and dependency flaws.
+        """
+        scan_path = target_dir or self.workspace
+        task = self.task_manager.create_task(
+            task_type="vulnerability_scan",
+            description=f"Security audit for {os.path.basename(scan_path)}",
+            assigned_agents=["ProjectAgent"],
+            required_permission=PermissionLevel.OBSERVE,
+            metadata={"target_dir": scan_path},
+        )
+        report = self.security_scanner.scan_project(scan_path)
+        for f in report.get("findings_objects", []):
+            self.event_bus.publish(
+                Event(
+                    event_type=EventType.FINDING_DETECTED,
+                    task_id=task.task_id,
+                    agent_name="SecurityScanner",
+                    severity=f.severity,
+                    message=f"{f.title}: {f.description[:100]}",
+                    data=f.to_dict(),
+                )
+            )
+        self.task_manager.complete_task(task.task_id, report)
+        return report
+
+    # -------------------------------------------------------------
+    # 9. System Logging & Error Auditing Workflow
+    # -------------------------------------------------------------
+    def audit_system_errors(self, target_dir: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Audits application logs, runtime dumps, and tracebacks to understand
+        error causes and produce handling suggestions.
+        """
+        scan_path = target_dir or self.workspace
+        task = self.task_manager.create_task(
+            task_type="error_audit",
+            description=f"Error log audit for {os.path.basename(scan_path)}",
+            assigned_agents=["MonitorAgent"],
+            required_permission=PermissionLevel.OBSERVE,
+            metadata={"target_dir": scan_path},
+        )
+        report = self.error_auditor.audit_all_logs(scan_path)
+        for f in report.get("findings_objects", []):
+            self.event_bus.publish(
+                Event(
+                    event_type=EventType.ERROR_DETECTED,
+                    task_id=task.task_id,
+                    agent_name="ErrorAuditor",
+                    severity=f.severity,
+                    message=f"{f.title}: {f.description[:100]}",
+                    data=f.to_dict(),
+                )
+            )
+        self.task_manager.complete_task(task.task_id, report)
+        return report
+
+    # -------------------------------------------------------------
+    # 10. End-to-End Audit, Report Generation (.doc) & Notification
+    # -------------------------------------------------------------
+    def audit_and_generate_report(
+        self,
+        target_dir: Optional[str] = None,
+        voice_speaker_fn=None,
+        force_email: bool = False,
+        output_doc_path: str = "report.doc",
+    ) -> Dict[str, Any]:
+        """
+        End-to-end integration:
+        1. Checks project vulnerabilities (SAST & dependencies).
+        2. Audits system error logs & tracebacks with causes and handling suggestions.
+        3. Creates professional Microsoft Word .doc (and .docx) report.
+        4. Detects user availability: speaks voice summary if present, or dispatches email if away.
+        """
+        scan_path = target_dir or self.workspace
+        print(f"\n🚀 [AgentOrchestrator] Running Complete Security & Error Audit on '{scan_path}'...")
+
+        # 1. Vulnerability Scan
+        vuln_report = self.scan_project_vulnerabilities(scan_path)
+
+        # 2. Error Log Audit
+        error_report = self.audit_system_errors(scan_path)
+
+        # 3. Generate Word Document (.doc and .docx)
+        doc_res = self.report_generator.generate_audit_report(
+            vuln_report=vuln_report,
+            error_report=error_report,
+            computer_use_history=self.computer_use_agent.action_history,
+            output_filename=output_doc_path,
+        )
+        doc_path = doc_res.get("doc_path") or os.path.abspath(output_doc_path)
+
+        # 4. Notify User via Voice (if present) or Email (if away)
+        if voice_speaker_fn:
+            self.notification_service.voice_speaker = voice_speaker_fn
+
+        notif_res = self.notification_service.notify_user_audit_results(
+            vuln_report=vuln_report,
+            error_report=error_report,
+            doc_path=doc_path,
+            force_email=force_email,
+        )
+
+        v_stats = vuln_report.get("stats", {})
+        e_stats = error_report.get("stats", {})
+        score = vuln_report.get("security_score", 100)
+
+        vulns = vuln_report.get("vulnerabilities", [])
+        major_vulns = [v for v in vulns if v.get("severity") in ["CRITICAL", "HIGH"]]
+
+        if major_vulns:
+            count = len(major_vulns)
+            major_titles = [v.get("title", "") for v in major_vulns[:3]]
+            major_str = ", ".join(major_titles)
+            more_str = f", plus {count - 3} more" if count > 3 else ""
+            vuln_word = "major vulnerability" if count == 1 else "major vulnerabilities"
+            summary_msg = (
+                f"Security audit complete. Detected {count} {vuln_word}: {major_str}{more_str}. "
+                f"The complete technical report with all vulnerabilities, errors, and handling suggestions has been generated in '{os.path.basename(doc_path)}'."
+            )
+        else:
+            summary_msg = (
+                f"Security audit complete with no major critical or high vulnerabilities. "
+                f"The full technical report has been generated in '{os.path.basename(doc_path)}'."
+            )
+
+        return {
+            "success": True,
+            "summary": summary_msg,
+            "security_score": score,
+            "vuln_report": vuln_report,
+            "error_report": error_report,
+            "doc_path": doc_path,
+            "docx_path": doc_res.get("docx_path"),
+            "notification": notif_res,
+        }
 
     # -------------------------------------------------------------
     # 6. Proactive Communication Queue

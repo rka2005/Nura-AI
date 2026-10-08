@@ -89,12 +89,13 @@ Whether commanded by **natural voice speech**, **tactical keyboard inputs**, or 
   - **`ScreenAgent` (Vision & Inspection)**: Direct screen perception, visual exception detection in terminals, OCR layout understanding, and UI error tracking.
   - **`MonitorAgent` (Background Operations)**: Persistent non-intrusive supervisor watching background jobs, CPU spikes, RAM thresholds, and process lifecycles.
   - **`SkillAgent` (Domain Automation)**: Dynamic skill learner and executor that registers, verifies, and executes parameterized workflows safely.
+  - **`ContextMemoryAgent` (Dual-Tier Context & Knowledge Archiving)**: Parallel supervisor that analyzes every user command, extracts context & feelings, manages `.agents/context_memory/` (`active_context.json`, `fixed_memory.json`, `temporary_memory.json`), enforces the 80% Context Similarity Protocol, and enables instant zero-API context recall.
 - **Enterprise Task Engine (`TaskManager` & `EventBus`)**: Complete lifecycle state tracking (`PENDING`, `IN_PROGRESS`, `COMPLETED`, `FAILED`, `CANCELLED`), priority queuing, permission boundaries (`SAFE`, `CONFIRMATION_REQUIRED`, `ADMIN`), and throttled proactive announcements.
 
 ### 🏢 8. 3D Virtual Agent Office in Neura Optics (Real-Time Isometric Visualization)
 - **In-Place Optics Viewport Switcher**: Directly renders within the **Neura Optics** camera panel at the top-right of the frontend HUD without altering the central sphere, HUD core, or audio spectrum.
 - **Office Geometry & Departments**:
-  - **Central Hall / Common Lounge**: Diamond platform at `(0, 0)` with a glowing holographic pedestal where idle agents rest and hover.
+  - **Central Hall / Common Lounge**: Diamond platform at `(0, 0)` with a glowing holographic pedestal where `MEMORY_ARCHIVIST` (Royal Violet / Lavender) monitors real-time context streams and idle agents rest.
   - **QA Lab** (`(-68, -24)`): Dual holographic workstations for `PROJECT_TESTER` (Electric Cyan).
   - **Vision Lab** (`(24, -68)`): Optical sensor radar array for `SCREEN_VISION` (Neon Magenta).
   - **Ops Center** (`(-24, 68)`): Server rack towers with active status LEDs for `SYS_MONITOR` (Emerald Green).
@@ -276,6 +277,7 @@ flowchart TB
         ScreenAgent["ScreenAgent<br/>(Vision & Error Inspection)"]
         MonitorAgent["MonitorAgent<br/>(Background Ops & Health)"]
         SkillAgent["SkillAgent<br/>(Domain Skills & Tools)"]
+        MemoryAgent["MemoryAgent<br/>(Dual Context & Knowledge)"]
         TaskManager["TaskManager & EventBus<br/>(Lifecycles & Non-Blocking Pub/Sub)"]
     end
 

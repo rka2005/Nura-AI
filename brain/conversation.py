@@ -23,7 +23,7 @@ gemini_model = None
 if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        for g_name in ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']:
+        for g_name in ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']:
             try:
                 gemini_model = genai.GenerativeModel(g_name)
                 break
@@ -39,7 +39,7 @@ if GROQ_API_KEY:
     except Exception as e:
         print(f"[Conversation] Groq config warning: {e}")
 
-GROQ_MODELS = ["qwen/qwen3.8-27b", "groq/compound", "openai/gpt-oss-120b"]
+GROQ_MODELS = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]
 
 def summarize_text(text_to_summarize: str) -> str:
     """Summarizes evicted conversation messages for rolling context."""
@@ -124,9 +124,45 @@ def generate_ai_response(user_query: str, memory_manager: MemoryManager) -> str:
     user_profile_section = memory_manager.get_user_profile_prompt()
     conversation_context_section = memory_manager.get_conversation_context()
 
+    # Retrieve active dual-tier context memory (temporary states + fixed memories)
+    dual_memory_section = ""
+    try:
+        from brain.agents import get_orchestrator
+        dual_memory_section = get_orchestrator().memory_agent.get_dual_memory_context_prompt()
+    except Exception:
+        pass
+
+    # Retrieve live screen perception if user asks about screen/display/what is written
+    screen_perception_section = ""
+    q_lower = user_query.lower()
+    if any(k in q_lower for k in ["screen", "see", "written", "looking", "desktop", "hair", "here", "window", "page"]):
+        try:
+            from brain.desktop_controller import DesktopController
+            ctrl = DesktopController()
+            ocr_text = ctrl.screen_vision.get_screen_ocr_text(max_lines=30)
+            win_inf = ctrl.screen_vision.get_active_window_info()
+            if ocr_text:
+                screen_perception_section = f"### Live Screen Perception (Foreground: '{win_inf.get('window_title')}', App: '{win_inf.get('application')}'):\n{ocr_text}\n"
+        except Exception:
+            pass
+
+    dual_block = f"\n{dual_memory_section}" if dual_memory_section else ""
+    if screen_perception_section:
+        screen_block = (
+            f"\n{screen_perception_section}\n"
+            "### Screen Perception Directive:\n"
+            "- You HAVE active screen access. The text and foreground window above represent the user's live screen.\n"
+            "- Answer questions about what is on screen, what is written, or the active app accurately using this perception.\n"
+            "- Never claim you cannot see or describe the screen or that you can only take screenshots.\n"
+        )
+    else:
+        screen_block = ""
+
     system_instruction = f"""{personality_section}
 
 {user_profile_section}
+{dual_block}
+{screen_block}
 """
     context_parts = []
     if conversation_context_section:
@@ -138,14 +174,17 @@ def generate_ai_response(user_query: str, memory_manager: MemoryManager) -> str:
     response_text = ""
 
     # 3. Try Gemini first
+    global gemini_model
     if gemini_model:
         try:
+            print("🌐 [API Call] Using Google Gemini API for response generation...")
             full_prompt = f"{system_instruction}\n\n{full_query}"
             gemini_resp = gemini_model.generate_content(full_prompt)
             if gemini_resp and gemini_resp.text and gemini_resp.text.strip() and not "error" in gemini_resp.text.lower():
                 response_text = gemini_resp.text.strip()
         except Exception as gemini_err:
             print(f"[Gemini failed: {gemini_err}] ⚡ Switching to Groq...")
+            gemini_model = None
 
     # 4. Fallback to Groq if Gemini failed or is unavailable
     if not response_text and groq_client:
@@ -165,6 +204,7 @@ def generate_ai_response(user_query: str, memory_manager: MemoryManager) -> str:
 
             for m in GROQ_MODELS:
                 try:
+                    print(f"⚡ [API Call] Using Groq API (model: {m}) for response generation...")
                     comp = groq_client.chat.completions.create(
                         model=m,
                         messages=messages,

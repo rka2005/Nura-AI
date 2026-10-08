@@ -38,6 +38,8 @@ class FindingCategory(str, Enum):
     ARCHITECTURE_CONCERN = "ARCHITECTURE_CONCERN"
     IMPROVEMENT_SUGGESTION = "IMPROVEMENT_SUGGESTION"
     OPTIONAL_REFACTOR = "OPTIONAL_REFACTOR"
+    VULNERABILITY = "VULNERABILITY"
+    ERROR_LOG = "ERROR_LOG"
 
 # Severity numeric rank for comparisons (higher = more severe)
 SEVERITY_ORDER = {

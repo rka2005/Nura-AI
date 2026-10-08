@@ -466,7 +466,15 @@ class DesktopController:
             self.screen_vision._ensure_input_desktop()
         except Exception:
             pass
-        return self.screen_vision.get_screen_description()
+        return self.screen_vision.read_and_summarize_screen(mode="describe")
+
+    def screen_read_and_summarize(self, query: str = "", mode: str = "describe") -> str:
+        """Reads OCR text from the visible screen and generates a natural summary or reading."""
+        try:
+            self.screen_vision._ensure_input_desktop()
+        except Exception:
+            pass
+        return self.screen_vision.read_and_summarize_screen(query=query, mode=mode)
 
     def get_background_activity(self) -> str:
         """

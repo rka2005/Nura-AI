@@ -25,6 +25,12 @@ from brain.agents.project_agent import ProjectAgent
 from brain.agents.screen_agent import ScreenAgent
 from brain.agents.monitor_agent import MonitorAgent
 from brain.agents.skill_agent import SkillAgent
+from brain.agents.context_memory_agent import ContextMemoryAgent
+from brain.agents.computer_use_agent import ComputerUseAgent
+from brain.agents.security_scanner import VulnerabilityScanner
+from brain.agents.error_auditor import ErrorAuditor
+from brain.notification_service import NotificationService
+from brain.report_doc_generator import ReportDocGenerator
 from brain.agents.orchestrator import AgentOrchestrator, get_orchestrator
 
 __all__ = [
@@ -44,6 +50,12 @@ __all__ = [
     "ScreenAgent",
     "MonitorAgent",
     "SkillAgent",
+    "ContextMemoryAgent",
+    "ComputerUseAgent",
+    "VulnerabilityScanner",
+    "ErrorAuditor",
+    "NotificationService",
+    "ReportDocGenerator",
     "AgentOrchestrator",
     "get_orchestrator",
 ]

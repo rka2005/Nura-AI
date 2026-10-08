@@ -46,8 +46,18 @@ AUTO_LEARN_BRIDGE_FILE = "auto_learn_bridge.json"
 load_dotenv()
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-genai.configure(api_key = os.getenv("GEMINI_API_KEY"))
-model = genai.GenerativeModel('gemini-2.0-flash')
+model = None
+if os.getenv("GEMINI_API_KEY"):
+    try:
+        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+        for g_name in ['gemini-3.8-flash', 'gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']:
+            try:
+                model = genai.GenerativeModel(g_name)
+                break
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"[Neura] Gemini model setup note: {e}")
 
 # 3-Tier Memory Manager
 memory_mgr = MemoryManager()
@@ -395,7 +405,9 @@ def execute_screen_vision_intent(intent, metadata, raw_query: str = ""):
         perm_prefix = "Screen access and background work permissions have been granted, Sir. "
 
     if intent == IntentType.SCREEN_DESCRIBE:
-        summary = desktop_ctrl.screen_describe()
+        mode = metadata.get("mode", "describe")
+        query_text = metadata.get("query", raw_query)
+        summary = desktop_ctrl.screen_read_and_summarize(query=query_text, mode=mode)
         return True, f"{perm_prefix}{summary}"
 
     elif intent == IntentType.SYSTEM_SCREEN_AND_BACKGROUND_STATUS:
@@ -561,6 +573,49 @@ def execute_agent_intent(intent, metadata, raw_query: str = ""):
         set_status_bridge_field("show_agent_office", False)
         return True, "Closing 3D visualization and restoring camera view in Neura Optics, Sir."
 
+    elif intent == IntentType.AGENT_COMPUTER_USE:
+        goal = metadata.get("goal") or raw_query
+        speak("Taking full screen access to perform the automation task, Sir.")
+        msg = orch.execute_computer_use(goal=goal)
+        return True, msg
+
+    elif intent == IntentType.AGENT_VULNERABILITY_SCAN:
+        speak("Starting automated security and vulnerability scan on your project, Sir.")
+        res = orch.audit_and_generate_report(voice_speaker_fn=None)
+        return True, res.get("summary", "Vulnerability scan completed.")
+
+    elif intent == IntentType.AGENT_ERROR_AUDIT:
+        speak("Auditing project error logs and diagnostic tracebacks, Sir.")
+        report = orch.audit_system_errors()
+        stats = report.get("stats", {})
+        msg = (
+            f"Log audit completed. Analyzed {stats.get('log_files_scanned', 0)} log files and "
+            f"identified {stats.get('total_errors', 0)} exception entries with causes and handling suggestions."
+        )
+        return True, msg
+
+    elif intent == IntentType.AGENT_FULL_AUDIT_REPORT:
+        speak("Commencing security vulnerability scan and error audit. Generating your Word document report...")
+        force_email = metadata.get("force_email", False)
+        res = orch.audit_and_generate_report(voice_speaker_fn=None, force_email=force_email)
+        return True, res.get("summary", "Complete audit finished and report generated.")
+
+    elif intent == IntentType.MEMORY_REMEMBER:
+        note_body = metadata.get("note") or raw_query
+        orch.memory_agent.record_task_success(
+            command=raw_query,
+            task_name="store_explicit_memory",
+            result_summary=f"Stored explicit user note: {note_body}",
+            details={"explicit_note": note_body}
+        )
+        return True, f"I have committed that to my fixed memory, Sir: '{note_body}'."
+
+    elif intent == IntentType.MEMORY_CONTEXT_QUERY:
+        ans = orch.memory_agent.answer_from_context_memory(raw_query)
+        if ans:
+            return True, ans
+        return True, "I checked my dual-tier context memory, Sir, but didn't find specific matching details."
+
     return False, ""
 
 def ask_neura(user_message):
@@ -571,6 +626,9 @@ def ask_neura(user_message):
     user_message_clean = user_message.strip()
     if not user_message_clean:
         return ""
+
+    orch = get_orchestrator()
+    orch.memory_agent.record_incoming_command_parallel(user_message_clean)
 
     um_lower = user_message_clean.lower()
 
@@ -618,6 +676,15 @@ def ask_neura(user_message):
 
     um_lower = user_message_clean.lower()
 
+    # 0. Direct Dual-Tier Context Memory Agent Retrieval (Zero API Call)
+    orch = get_orchestrator()
+    ctx_reply = orch.memory_agent.answer_from_context_memory(user_message_clean)
+    if ctx_reply:
+        speak(ctx_reply)
+        remember_interaction(user_message_clean, ctx_reply)
+        log_activity(f"Answered from context memory: {user_message_clean[:40]}")
+        return ctx_reply
+
     # 1. Direct Memory Retrieval (Zero API Call)
     mem_reply = memory_mgr.answer_from_memory(user_message_clean)
     if mem_reply:
@@ -649,8 +716,21 @@ def ask_neura(user_message):
         response = "I am standing by and monitoring your system, Sir. How can I help you?"
     elif "who are you" in um_lower or "your name" in um_lower:
         response = f"I am {IDENTITY['name']}, your personal AI assistant and desktop companion."
-    elif "what can you do" in um_lower:
-        response = "I can help you manage your computer, launch apps, write notes, monitor systems, and look up information."
+    elif any(phrase in um_lower for phrase in [
+        "what can you do", "what can you perform", "what all can you do", "what are your capabilities",
+        "what tasks can you perform", "what are your features", "tell me what you can do",
+        "tell me what you can perform", "tell me your capabilities", "what can be done by you",
+        "what can you do for me", "what are your functions", "what do you perform"
+    ]):
+        response = (
+            "Sir, I can perform the following functions:\n"
+            "• Screen Vision & Perception: Inspect and summarize your active screen, read text via OCR, click buttons, and open links.\n"
+            "• System Diagnostics: Check real-time CPU, RAM, disk usage, battery status, and test internet speed.\n"
+            "• Desktop Automation: Open and close desktop applications, manage files and folders, adjust volume and screen brightness.\n"
+            "• Media & YouTube: Search YouTube, play videos or songs, and provide mood-based music recommendations.\n"
+            "• Personal Assistance: Set alarms and reminders, write notes, store explicit facts, and remember your preferences.\n"
+            "• Multi-Agent Systems: Run background surveillance, code syntax diagnostics, and autonomous skill learning."
+        )
     elif "rohit adak" in um_lower:
         response = "He is my creator! A brilliant mind who brought me to life. I am honored to assist him."
     elif "who is your god" in um_lower:
@@ -1870,6 +1950,9 @@ if __name__ == "__main__":
             time.sleep(0.05)
             continue
 
+        # Parallel Context Memory Analysis & Routing
+        agent_orchestrator.memory_agent.record_incoming_command_parallel(query)
+
         if 'good bye' in query or 'goodbye' in query or 'exit' in query or 'bye' in query or "quit" in query or "good night" in query:
             speak("Goodbye Sir!")
             break
@@ -1902,6 +1985,7 @@ if __name__ == "__main__":
         if handled:
             speak(res)
             remember_interaction(query, res)
+            agent_orchestrator.memory_agent.record_task_success(query, str(intent), res)
             log_activity(f"Agent {intent}: {res[:40]}")
             continue
 
@@ -1910,26 +1994,31 @@ if __name__ == "__main__":
         if handled:
             speak(res)
             remember_interaction(query, res)
+            agent_orchestrator.memory_agent.record_task_success(query, str(intent), res)
             log_activity(f"Screen Vision {intent}: {res[:40]}")
             continue
         handled, res = execute_system_diagnostic_intent(intent)
         if handled:
             speak(res)
             remember_interaction(query, res)
+            agent_orchestrator.memory_agent.record_task_success(query, str(intent), res)
             log_activity(f"Diagnostic {intent}: {res[:40]}")
             continue
         handled, res = execute_youtube_play_intent(intent, metadata)
         if handled:
             speak(res)
+            agent_orchestrator.memory_agent.record_task_success(query, str(intent), res)
             continue
         handled, res = execute_youtube_search_intent(intent, metadata)
         if handled:
             speak(res)
+            agent_orchestrator.memory_agent.record_task_success(query, str(intent), res)
             continue
         handled, res = execute_desktop_or_file_intent(intent, metadata, query)
         if handled:
             speak(res)
             remember_interaction(query, res)
+            agent_orchestrator.memory_agent.record_task_success(query, str(intent), res)
             log_activity(f"Action {intent}: {res[:40]}")
             continue
 

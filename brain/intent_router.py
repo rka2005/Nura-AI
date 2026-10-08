@@ -31,6 +31,8 @@ class IntentType:
     MEMORY_CLEAR = "MEMORY_CLEAR"
     MEMORY_INSPECT = "MEMORY_INSPECT"
     MEMORY_RESET_CONVERSATION = "MEMORY_RESET_CONVERSATION"
+    MEMORY_REMEMBER = "MEMORY_REMEMBER"
+    MEMORY_CONTEXT_QUERY = "MEMORY_CONTEXT_QUERY"
 
     LOOKUP_WIKIPEDIA = "LOOKUP_WIKIPEDIA"
     LOOKUP_SEARCH = "LOOKUP_SEARCH"
@@ -73,6 +75,10 @@ class IntentType:
     AGENT_SCREEN_INSPECT = "AGENT_SCREEN_INSPECT"
     AGENT_OFFICE_SHOW = "AGENT_OFFICE_SHOW"
     AGENT_OFFICE_CLOSE = "AGENT_OFFICE_CLOSE"
+    AGENT_COMPUTER_USE = "AGENT_COMPUTER_USE"
+    AGENT_VULNERABILITY_SCAN = "AGENT_VULNERABILITY_SCAN"
+    AGENT_ERROR_AUDIT = "AGENT_ERROR_AUDIT"
+    AGENT_FULL_AUDIT_REPORT = "AGENT_FULL_AUDIT_REPORT"
 
     CONVERSATION = "CONVERSATION"
 
@@ -172,6 +178,62 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
     ]):
         return IntentType.AGENT_STATUS, {}
 
+    # Multi-Agent Subsystem: Full-Screen Autonomous Computer Use (Gemini & Claude style)
+    if any(p in q for p in [
+        'take full screen access', 'take full-screen access', 'full screen access',
+        'full-screen access', 'computer use', 'take screen access to perform',
+        'take screen access and perform', 'screen automation task', 'take full access of the screen',
+        'take access of the screen', 'automate task on screen', 'automation task on screen',
+        'automation task', 'perform a automation task', 'perform an automation task',
+        'perform automation task', 'screen automation'
+    ]) or re.search(r"\b(?:take\s+full\s+screen\s+access|take\s+(?:the\s+)?full\s+access\s+of\s+the\s+screen|automate\s+(?:task\s+)?on\s+screen|automation\s+task\s+on\s+screen)\b", q):
+        goal = query
+        for p in [
+            'take full screen access as like gemini or claude does',
+            'take full screen access as like gemini or claude',
+            'take full screen access and', 'take full screen access to',
+            'take full access of the screen and', 'take full access of the screen to',
+            'take full screen access', 'take screen access and', 'take screen access to',
+            'computer use:', 'computer use'
+        ]:
+            if p in goal.lower():
+                idx = goal.lower().find(p) + len(p)
+                sub_goal = goal[idx:].strip(" :,-")
+                if sub_goal:
+                    goal = sub_goal
+                break
+        return IntentType.AGENT_COMPUTER_USE, {"goal": goal}
+
+    # Multi-Agent Subsystem: Full Vulnerability & Error Audit with .doc Report Generation
+    has_doc_request = any(d in q for d in ['doc file', '.doc file', '.doc', 'doc report', 'report.doc', 'generate doc', 'create doc', 'word file', 'document file'])
+    has_dual_audit = ('vulnerabilit' in q and ('error' in q or 'logging' in q or 'audit' in q))
+
+    if has_doc_request or (has_dual_audit and any(r in q for r in ['report', 'doc', 'email', 'voice', 'generate', 'create'])):
+        force_email = any(e in q for e in ['email', 'by email', 'via email', 'mail'])
+        return IntentType.AGENT_FULL_AUDIT_REPORT, {"force_email": force_email}
+
+    # Multi-Agent Subsystem: Error Logging, Auditing & Diagnostic Interpretation
+    if any(p in q for p in [
+        'checking the logging, auditing and understanding the errors',
+        'checking the logging, auditing and understanding',
+        'checking the logging', 'checking logging',
+        'audit error logs', 'audit errors', 'audit logging and errors',
+        'audit logging and understand errors', 'audit logging', 'understand the errors',
+        'understand errors and report', 'understand errors', 'scan error logs',
+        'diagnose error logs', 'error log audit', 'system error audit', 'check error logs'
+    ]) or re.search(r"\b(?:check|audit|scan|understand)\s+(?:the\s+)?(?:error\s+logs?|logging|exceptions?)\b", q):
+        return IntentType.AGENT_ERROR_AUDIT, {}
+
+    # Multi-Agent Subsystem: Automated Project Vulnerability Scanning
+    if any(p in q for p in [
+        'check vulnerabilities', 'check vulnerability', 'vulnerability scan', 'vulnerability check',
+        'checking vulnerabilities', 'security audit', 'scan vulnerabilities', 'check security flaws',
+        'scan for vulnerabilities', 'find vulnerabilities', 'major vulnerabilities',
+        'tell major vulnerabilities', 'only major vulnerabilities', 'major security vulnerabilities',
+        'major vulnerabilities only', 'only the major vulnerabilities'
+    ]) or re.search(r"\b(?:check|scan|audit|find|tell|show|report)\s+(?:only\s+)?(?:the\s+)?(?:major\s+)?vulnerabilit\w*\b", q):
+        return IntentType.AGENT_VULNERABILITY_SCAN, {}
+
     # Multi-Agent Subsystem: Comprehensive Project Testing Workflow
     # "Neura, test my project", "test this project", "inspect my project", "run project tests"
     if re.search(r"\b(?:test|inspect|audit|check)\s+(?:my\s+|this\s+|the\s+)?project\b", q) or any(p in q for p in [
@@ -263,20 +325,47 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
     ]) or (has_bg_kw and any(w in q for w in ['running', 'happening', 'happens', 'tasks', 'activity', 'status', 'apps', 'processes', 'going on', 'what'])):
         return IntentType.SYSTEM_BACKGROUND_STATUS, {}
 
-    # Screen and Background Work Permissions (standalone grant/revoke)
-    if any(p in q for p in [
+    # Screen and Background Work Permissions (standalone grant/revoke or compound screen inspection)
+    has_perm_phrase = any(p in q for p in [
         'screen permission', 'screen access', 'background permission', 'background work permission',
         'background work', 'take screen permission', 'take the screen permission', 'take my screen permission',
         'allow screen access', 'grant screen access', 'allow screen permission', 'grant screen permission',
         'take background permission', 'take background work permission', 'grant background permission',
         'grant background work permission', 'allow background work', 'enable background work',
         'skin permission', 'skin access', 'take my skin permission', 'take skin permission'
-    ]):
-        action = "revoke" if any(w in q for w in ['stop', 'disable', 'revoke', 'deny']) else "grant"
-        return IntentType.SYSTEM_PERMISSION, {"action": action}
+    ])
+    if has_perm_phrase:
+        is_revoke = any(w in q for w in ['stop', 'disable', 'revoke', 'deny'])
+        if is_revoke:
+            return IntentType.SYSTEM_PERMISSION, {"action": "revoke"}
+
+        # Check if user also asked to see, read, summarize or inspect screen in the same command
+        if any(w in q for w in ['see', 'written', 'read', 'summarize', 'summary', 'context', 'tell me what', 'what is on', 'look', 'what can you see']):
+            screen_mode = "read_text" if any(w in q for w in ['written', 'read', 'text', 'hair']) else ("summarize" if any(w in q for w in ['summarize', 'summary', 'context']) else "describe")
+            return IntentType.SCREEN_DESCRIBE, {"mode": screen_mode, "query": query.strip(), "permission_granted": True}
+
+        return IntentType.SYSTEM_PERMISSION, {"action": "grant"}
 
     if any(phrase in q for phrase in ['what do you know about me', 'show my memory', 'what are my preferences', 'my profile']):
         return IntentType.MEMORY_INSPECT, {}
+
+    # Explicit remember command
+    if any(q.startswith(p) for p in ['remember this', 'remember that', 'remember:', 'remember ']) or any(p in q for p in ["don't forget that", "dont forget that", "store this in memory", "keep in mind that"]):
+        note = q
+        for prefix in ['remember this is', 'remember this:', 'remember this', 'remember that', 'remember:', 'remember', "don't forget that", "dont forget that", "keep in mind that"]:
+            if note.startswith(prefix):
+                note = note[len(prefix):].strip(" :,-")
+                break
+        return IntentType.MEMORY_REMEMBER, {"note": note}
+
+    # Context memory queries (mood, feelings, weather query recall, explicit notes recall)
+    if any(phrase in q for phrase in [
+        'what did i tell you to remember', 'what did i ask you to remember', 'do you remember what i told you',
+        'what is in your fixed memory', 'check fixed memory', 'show fixed memory',
+        'how am i feeling', 'how do i feel', 'what is my mood', "what's my mood", 'am i bored', 'did i say i am bored',
+        'what weather did i ask', 'what was the weather i asked',
+    ]):
+        return IntentType.MEMORY_CONTEXT_QUERY, {"query": q}
 
     # Clear conversation
     if any(phrase in q for phrase in ['clear conversation', 'reset conversation', 'clear chat', 'new chat']):
@@ -311,22 +400,56 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
     # Screen Vision Intents
     # ==========================================
 
-    # 1. Screen Describe / Content Awareness
-    if any(phrase in q for phrase in [
+    # 1. Screen Describe / Reading / Content Awareness / Summarization
+    is_screen_query = False
+    screen_mode = "describe"
+
+    screen_phrases = [
         'what happens in the screen', 'what happens on the screen', 'what happens on screen',
         'what is happening in the screen', 'what is happening on the screen', 'what is happening on screen',
         "what's happening on the screen", "what's happening in the screen", "what's happening on screen",
         'what is going on on my screen', 'what is going on in the screen', 'what is going on on screen',
         'what is currently open on my screen', 'what is open on my screen', "what's open on my screen",
         'what is on my screen', "what's on my screen", 'what is on the screen', "what's on the screen",
-        'what is on screen', "what's on screen",
+        'what is on screen', "what's on screen", 'what is currently on the screen',
         'what is this page about', "what's this page about", 'what is on this page', "what's on this page",
-        'describe my screen', 'describe the screen', 'read my screen', 'read the screen',
+        'describe my screen', 'describe the screen', 'describe what you see', 'describe what is on screen',
+        'read my screen', 'read the screen', 'read the text', 'read text on screen', 'read what is written',
+        'read what is on screen', 'read what is on the screen', 'read what you see', 'read the context',
+        'read screen context', 'read context',
         'what do you see on my screen', 'what can you see on my screen', 'scan screen and describe',
-        'summarize this page', 'summarize current screen', 'check the screen', 'check my screen',
-        'inspect the screen', 'inspect my screen', 'look at my screen', 'look at the screen'
-    ]):
-        return IntentType.SCREEN_DESCRIBE, {}
+        'what can you see now', 'what do you see now', 'what can you see', 'what do you see',
+        'tell me what you see', 'tell me what can you see', 'tell me what is on the screen', 'tell me what is on screen',
+        'can you tell me what can you see', 'can you tell me what you see', 'can you see now', 'can you see the screen',
+        'can you see my screen', 'can you see what is on the screen', 'can you see what is on screen',
+        'what are you seeing', 'what can be seen',
+        'what is written on hair', 'what is written on here', 'what is written here', 'what is written on screen',
+        'what is written on the screen', 'what is written in this window', 'what is written on the page',
+        'what is written', "what's written here", "what's written on screen", "what's written",
+        'what text is on screen', 'what text is written', 'tell me what is written',
+        'summarize this page', 'summarize current screen', 'summarize the screen', 'summarize my screen',
+        'summarize what you see', 'summarize what is on the screen', 'summarize what is on screen',
+        'summarize what is written', 'summarize screen context', 'summarize context',
+        'check the screen', 'check my screen', 'inspect the screen', 'inspect my screen',
+        'look at my screen', 'look at the screen'
+    ]
+
+    if any(phrase in q for phrase in screen_phrases):
+        is_screen_query = True
+    elif (
+        re.search(r"\b(?:what|tell me|can you tell me|read|summarize)\b.*\b(?:see|written|reading|screen|display)\b", q)
+        and not any(w in q for w in ["youtube", "google search", "wikipedia", "calculator", "weather", "volume", "brightness"])
+    ):
+        is_screen_query = True
+
+    if is_screen_query:
+        if any(w in q for w in ['written', 'read', 'text', 'hair']):
+            screen_mode = "read_text"
+        elif any(w in q for w in ['summarize', 'summary', 'context']):
+            screen_mode = "summarize"
+        else:
+            screen_mode = "describe"
+        return IntentType.SCREEN_DESCRIBE, {"mode": screen_mode, "query": query.strip()}
 
     # 2. Compound Scroll & Action: e.g. "scroll down and open the third result"
     scroll_compound = re.search(r"scroll\s+(down|up|bottom|top)\s+(?:and\s+)?(?:then\s+)?(open|click|play)\s+(?:the\s+)?(.+)", q, re.IGNORECASE)

@@ -183,7 +183,22 @@ class MemoryManager:
         q = query.strip().lower()
         facts = self.user_memory.get("user_facts", {})
         prefs = self.user_memory.get("preferences", {})
-        user_name = facts.get("name") or "Sir"
+        # 0. Capability questions
+        if any(p in q for p in [
+            "what can you do", "what can you perform", "what all can you do", "what are your capabilities",
+            "what tasks can you perform", "what are your features", "tell me what you can do",
+            "tell me what you can perform", "tell me your capabilities", "what can be done by you",
+            "what can you do for me", "what are your functions", "what do you perform"
+        ]):
+            return (
+                "Sir, I can perform the following functions:\n"
+                "• Screen Vision & Perception: Inspect and summarize your active screen, read text via OCR, click buttons, and open links.\n"
+                "• System Diagnostics: Check real-time CPU, RAM, disk usage, battery status, and test internet speed.\n"
+                "• Desktop Automation: Open and close desktop applications, manage files and folders, adjust volume and screen brightness.\n"
+                "• Media & YouTube: Search and play YouTube videos or songs, and provide mood-based music recommendations.\n"
+                "• Personal Assistance: Set alarms and reminders, write notes, store explicit facts, and remember your preferences.\n"
+                "• Multi-Agent Systems: Run background surveillance, code syntax diagnostics, and autonomous skill learning."
+            )
 
         # 1. User name questions
         if any(p in q for p in ["what is my name", "who am i", "do you know my name", "tell me my name", "what's my name"]):

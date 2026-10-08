@@ -1162,6 +1162,15 @@ class AgentOffice3D:
                 room_pos=(68, 24),
                 idle_pos=(22, 10)
             ),
+            "memory_agent": Agent3D(
+                agent_id="memory_agent",
+                name="MEMORY_ARCHIVIST",
+                short_name="MEMORY",
+                dept="DUAL CONTEXT",
+                color=(185, 115, 255),
+                room_pos=(0, 0),
+                idle_pos=(0, -8)
+            ),
         }
         self.demo_mode = False
         self.demo_timer = 0.0
@@ -1187,6 +1196,7 @@ class AgentOffice3D:
             "screen_vision": ["screen_vision", "ScreenAgent", "vision"],
             "system_monitor": ["system_monitor", "MonitorAgent", "monitor"],
             "skill_runner": ["skill_runner", "SkillAgent", "task_delegator", "skills"],
+            "memory_agent": ["memory_agent", "MemoryAgent", "ContextMemoryAgent", "memory"],
         }
 
         for aid, aobj in self.agents.items():
@@ -1473,6 +1483,7 @@ class AgentOffice3D:
             "screen_vision": (24, -68),
             "system_monitor": (-24, 68),
             "skill_runner": (68, 24),
+            "memory_agent": (0, 0),
         }
         for aid, (rx, ry) in room_coords.items():
             rsx, rsy = world_to_screen(rx, ry)

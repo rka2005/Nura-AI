@@ -237,20 +237,48 @@ class ScreenVision:
     #  SCREEN CAPTURE
     # ================================================================
 
+    def _capture_in_worker_thread(self) -> Optional[Image.Image]:
+        """
+        Captures screenshot in a dedicated fresh thread so SetThreadDesktop(OpenInputDesktop)
+        is never blocked by COM/UI objects in the main thread (Windows error 170).
+        """
+        user32 = ctypes.windll.user32
+        try:
+            hdesk = user32.OpenInputDesktop(0, False, 0x01FF)
+            if hdesk:
+                user32.SetThreadDesktop(hdesk)
+        except Exception:
+            pass
+
+        try:
+            return ImageGrab.grab()
+        except Exception:
+            try:
+                return pyautogui.screenshot()
+            except Exception:
+                return None
+
     def capture_screen(self) -> Optional[Image.Image]:
         """
         Captures the current full desktop display and temporarily buffers it.
         Returns PIL Image in screenshot pixel space.
         """
-        self._ensure_input_desktop()
         shot = None
+        self._ensure_input_desktop()
         try:
             shot = ImageGrab.grab()
         except Exception:
+            pass
+
+        # If direct grab failed (e.g. main thread has COM/pyttsx3 active, causing Error 170 on SetThreadDesktop),
+        # capture via a clean worker thread:
+        if shot is None:
             try:
-                shot = pyautogui.screenshot()
-            except Exception:
-                pass
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    shot = pool.submit(self._capture_in_worker_thread).result(timeout=4.0)
+            except Exception as e:
+                print(f"[Screen Vision] Worker thread capture note: {e}")
 
         if shot:
             try:
@@ -404,6 +432,8 @@ class ScreenVision:
                 "text": txt,
                 "bbox": [min_x, min_y, max_x, max_y],
                 "center": [cx, cy],
+                "x": min_x,
+                "y": min_y,
                 "confidence": w['confidence'],
                 "width": width,
                 "height": height
@@ -1360,8 +1390,176 @@ class ScreenVision:
         return True, f"Scrolled {direction} by {amount} units."
 
     # ================================================================
-    #  SCREEN DESCRIPTION
+    #  SCREEN READING, OCR RETRIEVAL & SUMMARIZATION
     # ================================================================
+
+    def get_screen_ocr_text(self, max_lines: int = 60) -> str:
+        """
+        Extracts clean, deduplicated OCR text from the active screen in natural reading order.
+        """
+        ctx = self.analyze_screen(force_refresh=True)
+        elements = ctx.get("elements", [])
+        if not elements:
+            return ""
+
+        def _elem_pos(el):
+            if "bbox" in el and len(el["bbox"]) >= 2:
+                return el["bbox"][0], el["bbox"][1]
+            if "center" in el and len(el["center"]) >= 2:
+                return el["center"][0], el["center"][1]
+            return el.get("x", 0), el.get("y", 0)
+
+        sorted_elems = sorted(elements, key=lambda e: (round(_elem_pos(e)[1] / 18.0) * 18, _elem_pos(e)[0]))
+        seen = set()
+        lines = []
+        for e in sorted_elems:
+            txt = e.get("text", "").strip()
+            if txt and len(txt) > 1 and txt not in seen:
+                seen.add(txt)
+                lines.append(txt)
+        return "\n".join(lines[:max_lines])
+
+    def read_and_summarize_screen(self, query: str = "", mode: str = "describe") -> str:
+        """
+        Captures the screen, runs OCR, and either reads what is written or synthesizes
+        a clear, intelligent summary of the screen content for the user.
+        Supports mode: 'read_text', 'summarize', or 'describe'.
+        """
+        ctx = self.analyze_screen(force_refresh=True)
+        app = ctx.get("application", "Desktop")
+        title = ctx.get("window_title", "Active Screen")
+        page_type = ctx.get("page_type", "general")
+        elements = ctx.get("elements", [])
+
+        if not elements:
+            return f"Currently on your screen: {app} is in the foreground with window title '{title}'. No visible text could be captured."
+
+        def _elem_pos(el):
+            if "bbox" in el and len(el["bbox"]) >= 2:
+                return el["bbox"][0], el["bbox"][1]
+            if "center" in el and len(el["center"]) >= 2:
+                return el["center"][0], el["center"][1]
+            return el.get("x", 0), el.get("y", 0)
+
+        sorted_elems = sorted(elements, key=lambda e: (round(_elem_pos(e)[1] / 18.0) * 18, _elem_pos(e)[0]))
+        seen = set()
+        lines = []
+        for e in sorted_elems:
+            txt = e.get("text", "").strip()
+            if txt and len(txt) > 1 and txt not in seen:
+                seen.add(txt)
+                lines.append(txt)
+
+        ocr_block = "\n".join(lines[:45])
+
+        # 1. Attempt high-speed LLM synthesis for natural conversational answers
+        llm_answer = self._synthesize_screen_with_llm(
+            query=query or ("what is written on screen" if mode == "read_text" else "what is on the screen"),
+            app=app,
+            title=title,
+            page_type=page_type,
+            ocr_text=ocr_block,
+            mode=mode,
+        )
+        if llm_answer:
+            return llm_answer
+
+        # 2. Local Fallback Synthesizer (Zero API / Offline)
+        if mode == "read_text":
+            prominent = [l for l in lines if len(l.split()) >= 2][:6]
+            if prominent:
+                formatted = "; ".join(prominent)
+                return f"In your active window '{title}' ({app}), the visible text includes: {formatted}."
+            return f"In your active window '{title}' ({app}), the visible text includes: {'; '.join(lines[:5])}."
+
+        elif mode == "summarize":
+            if page_type == "youtube":
+                videos = [e["text"] for e in elements if e.get("semantic_type") == "video_title"]
+                if videos:
+                    return f"You are browsing YouTube in {app} ('{title}'). Top visible videos are: {' | '.join(videos[:3])}."
+            elif page_type == "google_search":
+                links = [e["text"] for e in elements if e.get("semantic_type") == "link_title"]
+                if links:
+                    return f"You are on Google Search in {app} ('{title}'). The top search results are: {' | '.join(links[:3])}."
+            prominent = [l for l in lines if len(l.split()) >= 2][:5]
+            summary_sample = "; ".join(prominent) if prominent else "standard interface items"
+            return f"Summary of your active screen: {app} is open with title '{title}'. Key visible content: {summary_sample}."
+
+        else:
+            return self.get_screen_description()
+
+    def _synthesize_screen_with_llm(
+        self,
+        query: str,
+        app: str,
+        title: str,
+        page_type: str,
+        ocr_text: str,
+        mode: str,
+    ) -> Optional[str]:
+        """Synthesizes OCR screen content using Groq LLM for natural responses."""
+        try:
+            from groq import Groq
+            key = os.getenv("GROQ_API_KEY")
+            if not key or not ocr_text.strip():
+                return None
+
+            client = Groq(api_key=key)
+
+            if mode == "read_text":
+                sys_prompt = (
+                    "You are Neura AI, a personal desktop companion. "
+                    "The user granted screen permission and asked you to read what is written on the screen. "
+                    "Analyze the provided OCR text from the user's active window and tell them clearly and accurately "
+                    "what is written. Be direct, natural, and concise (2-3 sentences max). "
+                    "Mention the active window if relevant. Do NOT say you cannot see the screen."
+                )
+            elif mode == "summarize":
+                sys_prompt = (
+                    "You are Neura AI, a personal desktop companion. "
+                    "The user granted screen permission and asked you to summarize the screen context. "
+                    "Analyze the provided OCR text from the user's active window and provide a concise, insightful "
+                    "summary of what is on screen and what topic/document is active (2-3 sentences max). "
+                    "Do NOT say you cannot see the screen."
+                )
+            else:
+                sys_prompt = (
+                    "You are Neura AI, a personal desktop companion. "
+                    "The user granted screen permission and asked what you can see on the screen. "
+                    "Analyze the provided OCR text and active window to give a clear, direct, and conversational "
+                    "answer describing what is visible right now (2-3 sentences max). "
+                    "Do NOT say you cannot see the screen or that you only take screenshots."
+                )
+
+            user_content = (
+                f"User Question: {query}\n"
+                f"Active Application: {app}\n"
+                f"Window Title: {title}\n"
+                f"Page Type: {page_type}\n\n"
+                f"--- SCREEN OCR TEXT ---\n"
+                f"{ocr_text}\n"
+                f"------------------------\n"
+            )
+
+            for m in ["qwen/qwen3.8-27b", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
+                try:
+                    resp = client.chat.completions.create(
+                        model=m,
+                        messages=[
+                            {"role": "system", "content": sys_prompt},
+                            {"role": "user", "content": user_content},
+                        ],
+                        max_tokens=220,
+                        temperature=0.3,
+                    )
+                    txt = resp.choices[0].message.content.strip()
+                    if txt and not "error" in txt.lower():
+                        return txt
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return None
 
     def get_screen_description(self) -> str:
         """
