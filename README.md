@@ -59,7 +59,7 @@ Whether commanded by **natural voice speech**, **tactical keyboard inputs**, or 
 
 ### 🌐 3. Quantum Cybernetic HUD (Pygame 2.6 Engine)
 - **3D Audio-Reactive Golden Sphere**: 1,800+ mathematically projected surface particles reacting in real-time to microphone acoustic amplitude.
-- **Jarvis Arc Reactor HUD**: Rotating processor hexagon, sweeping radar lasers, orbital energy satellites, and expanding voice pulse rings.
+- **Neura Arc Reactor HUD**: Rotating processor hexagon, sweeping radar lasers, orbital energy satellites, and expanding voice pulse rings.
 - **24-Band Animated Spectrum Visualizer**: Real-time acoustic frequency equalizer bars styled with dynamic theme gradients.
 - **Dynamic Theme Engine**: 4 instant colorways (**Orange/Gold**, **Neon Purple**, **Battle Red**, and **Bio Matrix Green**) switchable via in-app chips or hotkeys `1-4`.
 - **Adaptive Layout Engine**: Fluid, responsive grid calculations preventing panel collisions on any display resolution from 720p to 4K.
@@ -367,7 +367,7 @@ flowchart TB
 
 | Category | Technologies / Libraries |
 | :--- | :--- |
-| **Programming Language** | Python 3.10 / 3.11 / 3.12 |
+| **Programming Language** | Python `3.11` (recommended) |
 | **Computer Vision & Biometrics** | OpenCV 4.x (`cv2`), YuNet ONNX, SFace ONNX, NumPy |
 | **Screen Vision & Desktop OCR** | Windows Media OCR (`winocr`), PyTesseract, Pillow (`PIL`), `ctypes` (Per-Monitor DPI v2) |
 | **Graphical Interface** | Pygame 2.6, PyAudio |
@@ -611,7 +611,7 @@ Neura accepts commands via **Voice Speech**, **Typing into the HUD input box**, 
 | **Cognitive Memory** | *"What do you know about me"*, *"My favorite city is Tokyo"* | Reads / writes to 3-tier memory engine |
 | **File System CRUD** | *"Create file notes.txt with hello"*, *"Read file notes.txt"*, *"List files"* | Deterministic file operations via `FileManager` without API calls |
 | **Productivity & Notes** | *"Take a note"*, *"Read my notes"*, *"Set a reminder"* | Creates timestamped local notes & timers |
-| **Alert (Relative Offset)** | *"I have a meeting after 5 minutes, so alert me before 2 minutes of that"* | Calculates offset ($5-2=3$m) and schedules alert for 3m from now |
+| **Alert (Relative Offset)** | *"I have a meeting after 5 minutes, so alert me before 2 minutes of that"* | Calculates offset ($5-2=3$ minutes) and schedules alert for 3m from now |
 | **Alert (Contextual Meeting)** | *"Neura please alert me after 5 minutes that I have an important meeting"* | Schedules 5m alert; speaks contextual meeting reminder on trigger |
 | **Alert (Action Reminder)** | *"Set an alert after 10 minutes to take medicine"* | Sets 10m timer; speaks *"Sir! It is time to take your medicine..."* |
 | **Alarm (Direct Timer)** | *"Set an alarm for 5 minutes"*, *"Alert me in 30 seconds"* | Schedules direct countdown timer with audio chime & toast |
