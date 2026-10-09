@@ -124,19 +124,74 @@ ModuleNotFoundError: No module named 'non_existent_super_library'
         self.assertIn("General Static Test", proj_summary)
 
     def test_08_prompt_user_for_terminal_permission_resilience(self):
-        """Verify prompt_user_for_terminal_permission executes cleanly without NameError."""
-        from neura import prompt_user_for_terminal_permission, INPUT_BRIDGE_FILE
+        """Verify prompt_user_for_terminal_permission and classify_terminal_permission_reply."""
+        from neura import (
+            prompt_user_for_terminal_permission,
+            classify_terminal_permission_reply,
+            INPUT_BRIDGE_FILE
+        )
 
-        # Test permission granted via input bridge
+        # 1. Test reply classifier on yes variations
+        yes_cases = [
+            "yes",
+            "yes access the terminal",
+            "ok, access the terminal",
+            "okay access the terminal",
+            "access the terminal",
+            "allow",
+            "grant",
+            "proceed with terminal"
+        ]
+        for y in yes_cases:
+            self.assertTrue(classify_terminal_permission_reply(y), f"Expected True for '{y}'")
+
+        # 2. Test reply classifier on no variations
+        no_cases = [
+            "no",
+            "no access the terminal",
+            "no don't access the terminal",
+            "don't access the terminal",
+            "deny",
+            "without terminal",
+            "no terminal",
+            "cancel"
+        ]
+        for n in no_cases:
+            self.assertFalse(classify_terminal_permission_reply(n), f"Expected False for '{n}'")
+
+        # 3. Test reply classifier on unnecessary/ambiguous answers
+        ambiguous_cases = [
+            "what is terminal",
+            "can you hear me",
+            "hello",
+            "what does that mean",
+            ""
+        ]
+        for a in ambiguous_cases:
+            self.assertIsNone(classify_terminal_permission_reply(a), f"Expected None for '{a}'")
+
+        # 4. Test permission granted via input bridge with compound phrase
         with open(INPUT_BRIDGE_FILE, "w", encoding="utf-8") as f:
-            json.dump(["yes"], f)
-        perm = prompt_user_for_terminal_permission("test target project", timeout=1.0)
+            json.dump(["ok, access the terminal"], f)
+        perm = prompt_user_for_terminal_permission("test target project", timeout=0.5)
         self.assertTrue(perm)
 
-        # Test permission denied via input bridge
+        # 5. Test permission denied via input bridge with compound phrase
         with open(INPUT_BRIDGE_FILE, "w", encoding="utf-8") as f:
-            json.dump(["no"], f)
-        perm = prompt_user_for_terminal_permission("test target project", timeout=1.0)
+            json.dump(["don't access the terminal"], f)
+        perm = prompt_user_for_terminal_permission("test target project", timeout=0.5)
+        self.assertFalse(perm)
+
+        # 6. Test retry flow: unnecessary answer on attempt 1, followed by 'yes' on attempt 2
+        with open(INPUT_BRIDGE_FILE, "w", encoding="utf-8") as f:
+            json.dump(["what are you doing", "yes access the terminal"], f)
+        perm = prompt_user_for_terminal_permission("test target project", timeout=0.5, max_retries=3)
+        self.assertTrue(perm)
+
+        # 7. Test exhaustion: 3 unnecessary answers default to 'no' (False)
+        with open(INPUT_BRIDGE_FILE, "w", encoding="utf-8") as f:
+            json.dump(["what", "explain again", "still not sure"], f)
+        perm = prompt_user_for_terminal_permission("test target project", timeout=0.5, max_retries=3)
         self.assertFalse(perm)
 
     def test_09_execute_agent_intent_project_test(self):

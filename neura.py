@@ -786,11 +786,59 @@ def execute_alert_intent(intent, metadata, raw_query: str = ""):
         else:
             return True, "Sir, please tell me after how many minutes or at what time you would like me to set the alert."
 
-def prompt_user_for_terminal_permission(target_desc: str, timeout: float = 10.0) -> bool:
+def classify_terminal_permission_reply(reply: str) -> Optional[bool]:
+    """
+    Classifies user reply for terminal permission into:
+    - True ('yes'): user allows terminal access (e.g. 'yes', 'yes access the terminal', 'ok, access the terminal', 'allow')
+    - False ('no'): user denies terminal access (e.g. 'no', 'don't access the terminal', 'deny', 'without terminal')
+    - None: unnecessary or ambiguous answer requiring clarification.
+    """
+    if not reply:
+        return None
+    r = reply.strip().lower().replace(",", " ").replace(".", " ")
+    r = " ".join(r.split())
+
+    # 1. Negative / Denial indicators (checked first to prevent false positive on compound phrases like "no access")
+    no_indicators = [
+        "no", "nope", "nah", "deny", "disallow", "cancel", "skip", "negative", "reject"
+    ]
+    is_negation = (
+        r in no_indicators
+        or any(r.startswith(p) for p in ["no ", "nope ", "deny ", "don't ", "dont ", "do not "])
+        or any(p in r for p in [
+            "no access", "deny access", "don't access", "dont access", "do not access",
+            "without terminal", "no terminal", "deny permission", "don't allow", "dont allow",
+            "do not allow", "access denied", "not granted", "not allowed", "skip terminal"
+        ])
+    )
+    if is_negation:
+        return False
+
+    # 2. Affirmative / Granting indicators
+    is_affirmative = (
+        r in ["yes", "yeah", "yep", "yup", "sure", "allow", "grant", "ok", "okay", "proceed"]
+        or any(r.startswith(p) for p in ["yes ", "yeah ", "yep ", "sure ", "allow ", "grant ", "ok ", "okay "])
+        or any(p in r for p in [
+            "access the terminal", "access terminal", "use terminal", "allow terminal",
+            "grant terminal", "give terminal", "terminal access", "terminal permission",
+            "allow access", "grant access", "proceed with terminal", "run in terminal",
+            "yes access", "ok access", "okay access", "sure access"
+        ])
+        or (any(w in r for w in ["ok", "okay", "sure", "yes", "allow"]) and "terminal" in r)
+    )
+    if is_affirmative:
+        return True
+
+    return None
+
+
+def prompt_user_for_terminal_permission(target_desc: str, timeout: float = 10.0, max_retries: int = 3) -> bool:
     """
     Prompts user via voice and chat bridge for terminal access permission.
-    Listens for user response via GUI input bridge (text) or microphone (voice).
-    Returns True if permission is granted, False otherwise.
+    Waits 10 seconds per attempt for user reply (voice or text).
+    If an unnecessary/ambiguous answer is received, asks user again up to 3 times:
+      "Terminal access is granted or not? Say 'yes' to allow access or say 'no' to deny the access."
+    If no reply is received after 3 attempts, defaults to 'no' (False) and proceeds.
     """
     import sys
     is_test_env = (
@@ -798,84 +846,127 @@ def prompt_user_for_terminal_permission(target_desc: str, timeout: float = 10.0)
         or os.environ.get("NEURA_TEST_MODE") == "1"
     )
 
-    prompt_text = (
-        f"To test and debug {target_desc}, I need terminal access. "
-        f"Do you grant terminal permission? Please say or type yes to allow, or no for a general test."
-    )
-    speak(prompt_text)
-    send_to_frontend(
-        "neura",
-        f"⚠️ **Terminal Access Permission Required**\n\n"
-        f"To execute dynamic tests and terminal debugging on **{target_desc}**, Neura needs terminal access.\n\n"
-        f"* **Grant Access**: Type or speak `yes`, `allow`, or `grant`\n"
-        f"* **Deny / Safe Test**: Type or speak `no` or `deny` (general static test will be performed)"
-    )
+    for attempt in range(1, max_retries + 1):
+        if attempt == 1:
+            spoken_prompt = (
+                f"To test and debug {target_desc}, I need terminal access. "
+                f"Terminal access is granted or not? Say 'yes' to allow access or say 'no' to deny the access."
+            )
+            frontend_card = (
+                f"⚠️ **Terminal Access Permission Required (Attempt 1 of {max_retries})**\n\n"
+                f"To execute dynamic tests and terminal debugging on **{target_desc}**, Neura needs terminal access.\n\n"
+                f"* **Grant Access**: Type or speak `yes`, `allow`, `grant`, or `ok, access the terminal`\n"
+                f"* **Deny / Safe Test**: Type or speak `no`, `deny`, or `don't access the terminal`\n\n"
+                f"*(Waiting 10 seconds for your reply...)*"
+            )
+        else:
+            spoken_prompt = (
+                "Terminal access is granted or not? Say 'yes' to allow access or say 'no' to deny the access."
+            )
+            frontend_card = (
+                f"⚠️ **Terminal Permission Clarification (Attempt {attempt} of {max_retries})**\n\n"
+                f"Terminal access is granted or not?\n"
+                f"* Say or type **'yes'** to allow access\n"
+                f"* Say or type **'no'** to deny the access\n\n"
+                f"*(Waiting 10 seconds for your reply...)*"
+            )
 
-    # In automated test environments without simulated input, do not block
-    if is_test_env:
-        quick_cmd = check_input_bridge()
-        if quick_cmd:
-            norm = quick_cmd.lower().strip()
-            if any(w in norm for w in ["yes", "allow", "grant", "sure", "ok", "okay", "proceed"]):
-                return True
-            if any(w in norm for w in ["no", "deny", "skip", "cancel"]):
+        print(f"\n[Terminal Permission] Prompting user (Attempt {attempt}/{max_retries}): {spoken_prompt}")
+        send_to_frontend("neura", frontend_card)
+        speak(spoken_prompt)
+
+        # In unit tests, check input bridge right away
+        if is_test_env:
+            quick_cmd = check_input_bridge()
+            if quick_cmd:
+                decision = classify_terminal_permission_reply(quick_cmd)
+                if decision is True:
+                    return True
+                elif decision is False:
+                    return False
+            elif timeout <= 1.0:
+                # Fast fallback for automated test runs without inputs
                 return False
-        return False
 
-    result_holder = {"permission": None}
-    stop_event = threading.Event()
+        # Active listening for this attempt (10 seconds)
+        result_holder = {"raw_reply": None, "decision": None}
+        stop_event = threading.Event()
 
-    def _voice_listener():
-        try:
-            r = sr.Recognizer()
+        def _voice_listener():
             try:
-                mic_src = sr.Microphone(device_index=1)
-            except Exception:
-                mic_src = sr.Microphone()
-            with mic_src as source:
-                r.adjust_for_ambient_noise(source, duration=0.25)
-                while not stop_event.is_set():
-                    try:
-                        audio = r.listen(source, timeout=1.5, phrase_time_limit=3.5)
-                        query = r.recognize_google(audio, language='en-in').lower().strip()
-                        print(f"[Terminal Permission] User said: '{query}'")
-                        send_to_frontend("user", query)
-                        if any(w in query for w in ["yes", "yeah", "yep", "allow", "grant", "granted", "sure", "ok", "okay", "go ahead", "run", "do it", "proceed", "terminal"]):
-                            result_holder["permission"] = True
+                r = sr.Recognizer()
+                try:
+                    mic_src = sr.Microphone(device_index=1)
+                except Exception:
+                    mic_src = sr.Microphone()
+                with mic_src as source:
+                    r.adjust_for_ambient_noise(source, duration=0.25)
+                    while not stop_event.is_set():
+                        try:
+                            audio = r.listen(source, timeout=1.5, phrase_time_limit=4.0)
+                            query = r.recognize_google(audio, language='en-in').lower().strip()
+                            print(f"[Terminal Permission] Voice captured: '{query}'")
+                            send_to_frontend("user", query)
+                            decision = classify_terminal_permission_reply(query)
+                            result_holder["raw_reply"] = query
+                            result_holder["decision"] = decision
                             return
-                        if any(w in query for w in ["no", "nope", "deny", "don't", "dont", "no terminal", "cancel", "skip", "without", "general"]):
-                            result_holder["permission"] = False
-                            return
-                    except (sr.WaitTimeoutError, sr.UnknownValueError, sr.RequestError):
-                        continue
-        except Exception:
-            pass
+                        except (sr.WaitTimeoutError, sr.UnknownValueError, sr.RequestError):
+                            continue
+            except Exception as e:
+                print(f"[Terminal Permission] Voice listener error: {e}")
 
-    listener_thread = threading.Thread(target=_voice_listener, daemon=True)
-    listener_thread.start()
+        listener_thread = threading.Thread(target=_voice_listener, daemon=True)
+        listener_thread.start()
 
-    start_time = time.time()
-    while (time.time() - start_time) < timeout:
-        # 1. Check text command from input bridge (responsive every 100ms)
-        bridge_cmd = check_input_bridge()
-        if bridge_cmd:
-            norm = bridge_cmd.lower().strip()
-            print(f"[Terminal Permission] Received chat input: '{norm}'")
-            if any(w in norm for w in ["yes", "yeah", "yep", "allow", "grant", "granted", "sure", "ok", "okay", "go ahead", "run", "do it", "proceed", "terminal"]):
+        start_time = time.time()
+        while (time.time() - start_time) < timeout:
+            # 1. Check chat GUI input bridge (every 100ms)
+            bridge_cmd = check_input_bridge()
+            if bridge_cmd:
+                norm = bridge_cmd.lower().strip()
+                print(f"[Terminal Permission] Chat input captured: '{norm}'")
+                decision = classify_terminal_permission_reply(norm)
+                result_holder["raw_reply"] = norm
+                result_holder["decision"] = decision
                 stop_event.set()
-                return True
-            if any(w in norm for w in ["no", "nope", "deny", "don't", "dont", "no terminal", "cancel", "skip", "without", "general"]):
+                break
+
+            # 2. Check voice listener result
+            if result_holder["raw_reply"] is not None:
                 stop_event.set()
-                return False
+                break
 
-        # 2. Check microphone result from listener thread
-        if result_holder["permission"] is not None:
-            stop_event.set()
-            return result_holder["permission"]
+            time.sleep(0.1)
 
-        time.sleep(0.1)
+        stop_event.set()
 
-    stop_event.set()
+        decision = result_holder["decision"]
+        raw = result_holder["raw_reply"]
+
+        if decision is True:
+            confirm_msg = "Terminal access granted. Proceeding with terminal testing, Sir."
+            print(f"[Terminal Permission] Decision: YES (reply: '{raw}')")
+            send_to_frontend("neura", "✅ **Terminal Permission: GRANTED**. Accessing terminal to run dynamic tests and debugging.")
+            speak(confirm_msg)
+            return True
+        elif decision is False:
+            deny_msg = "Terminal access denied. Proceeding with general static testing, Sir."
+            print(f"[Terminal Permission] Decision: NO (reply: '{raw}')")
+            send_to_frontend("neura", "ℹ️ **Terminal Permission: NOT GRANTED**. Performing general static testing.")
+            speak(deny_msg)
+            return False
+        else:
+            if raw:
+                print(f"[Terminal Permission] Unnecessary/unrecognized answer: '{raw}'. Requesting clarification (attempt {attempt}/{max_retries}).")
+            else:
+                print(f"[Terminal Permission] No reply received within {timeout}s (attempt {attempt}/{max_retries}).")
+
+    # If all 3 attempts exhausted without valid response:
+    fallback_msg = "No reply received after 3 attempts. Setting terminal permission to 'no' and proceeding with general test, Sir."
+    print(f"[Terminal Permission] All {max_retries} attempts exhausted without reply. Defaulting to 'no'.")
+    send_to_frontend("neura", "⚠️ **No response received after 3 attempts.** Setting terminal permission to **'no'** and proceeding with general static testing.")
+    speak(fallback_msg)
     return False
 
 def execute_agent_intent(intent, metadata, raw_query: str = ""):
@@ -967,12 +1058,6 @@ def execute_agent_intent(intent, metadata, raw_query: str = ""):
             speak(f"Terminal access disabled. Performing general static analysis on {target_desc}, Sir.")
         else:
             terminal_allowed = prompt_user_for_terminal_permission(target_desc)
-            if terminal_allowed:
-                speak("Terminal access granted, Sir. Accessing terminal to run dynamic tests and debugging.")
-                send_to_frontend("neura", "✅ **Terminal Access: GRANTED**. Accessing terminal to run test suites and debugging...")
-            else:
-                speak("Terminal access not granted, Sir. Performing general static test without terminal execution.")
-                send_to_frontend("neura", "ℹ️ **Terminal Access: NOT GRANTED**. Performing general static test without terminal execution...")
 
         # 5. Execute Project / File Testing via Orchestrator
         if target_file:
