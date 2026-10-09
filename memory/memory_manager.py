@@ -183,6 +183,7 @@ class MemoryManager:
         q = query.strip().lower()
         facts = self.user_memory.get("user_facts", {})
         prefs = self.user_memory.get("preferences", {})
+        user_name = facts.get("name") or "Sir"
         # 0. Capability questions
         if any(p in q for p in [
             "what can you do", "what can you perform", "what all can you do", "what are your capabilities",

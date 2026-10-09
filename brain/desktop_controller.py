@@ -9,7 +9,7 @@ import re
 import time
 import datetime
 import subprocess
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple, Any, Dict
 import pyautogui
 import pygetwindow as gw
 import keyboard
@@ -582,4 +582,66 @@ class DesktopController:
         screen_desc = self.screen_describe()
         bg_desc = self.get_background_activity()
         return f"{screen_desc} {bg_desc}"
+
+    def detect_target_from_screen(self) -> Dict[str, Any]:
+        """
+        Inspects the active window title and open desktop applications to detect
+        the currently visible project name, active source file, or IDE context.
+        Supports VS Code, Antigravity IDE, PyCharm, Sublime, Cursor, Notepad.
+        """
+        title = self.get_active_window_title()
+        result = {
+            "project_name": None,
+            "file_name": None,
+            "app_name": None,
+            "window_title": title
+        }
+
+        # Candidate titles to inspect: foreground first, then all open windows
+        candidate_titles = [title] if title else []
+        try:
+            for w in gw.getAllTitles():
+                t = w.strip()
+                if t and t not in candidate_titles:
+                    candidate_titles.append(t)
+        except Exception:
+            pass
+
+        ide_keywords = ["visual studio code", "vscode", "antigravity ide", "pycharm", "sublime text", "cursor", "notepad"]
+
+        for t in candidate_titles:
+            t_lower = t.lower()
+            if not any(k in t_lower for k in ide_keywords):
+                continue
+
+            # Identify app name
+            if "visual studio code" in t_lower or "code" in t_lower:
+                result["app_name"] = "Visual Studio Code"
+            elif "antigravity" in t_lower:
+                result["app_name"] = "Antigravity IDE"
+            elif "pycharm" in t_lower:
+                result["app_name"] = "PyCharm"
+            elif "cursor" in t_lower:
+                result["app_name"] = "Cursor"
+            elif "sublime" in t_lower:
+                result["app_name"] = "Sublime Text"
+            elif "notepad" in t_lower:
+                result["app_name"] = "Notepad"
+
+            # Parse VS Code title patterns: e.g. "neura.py - Neura_test_ai - Visual Studio Code"
+            # or "brain/intent_router.py - Neura_test_ai [Administrator] - Visual Studio Code"
+            parts = [p.strip() for p in t.split(" - ") if p.strip()]
+            for p in parts:
+                clean_p = re.sub(r"\[.*?\]", "", p).strip()
+                if re.search(r"\b[a-zA-Z0-9_\-]+\.(?:py|js|ts|jsx|tsx|html|css|json|cpp|c|java|go|rs|txt|md)\b", clean_p):
+                    if not result["file_name"]:
+                        result["file_name"] = os.path.basename(clean_p)
+                elif clean_p.lower() not in [k.lower() for k in ide_keywords] and len(clean_p) >= 2:
+                    if not result["project_name"] and not clean_p.lower().startswith("welcome") and not clean_p.lower().startswith("untitled"):
+                        result["project_name"] = clean_p
+
+            if result["project_name"] or result["file_name"]:
+                break
+
+        return result
 

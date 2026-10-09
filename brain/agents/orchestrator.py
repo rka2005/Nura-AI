@@ -84,27 +84,44 @@ class AgentOrchestrator:
     # -------------------------------------------------------------
     # 1. Project Testing & Inspection Workflow
     # -------------------------------------------------------------
-    def test_project(self, workspace: Optional[str] = None) -> str:
+    def test_project(
+        self,
+        workspace: Optional[str] = None,
+        target_file: Optional[str] = None,
+        terminal_allowed: bool = False,
+        target_name: Optional[str] = None,
+        from_screen: bool = False,
+    ) -> str:
         """
-        Coordinates full project testing:
+        Coordinates full project or specific file testing:
         - Identifies structure & tech stack
-        - Audits dependencies
-        - Validates syntax
-        - Executes available test suites
+        - Audits dependencies & static AST syntax
+        - Executes available test suites / scripts in terminal if terminal_allowed=True
+        - Performs automated debugging for runtime errors
         - Categorizes findings by severity
         """
         target_ws = workspace or self.workspace
-        self.assign_agents_for_intent("AGENT_PROJECT_TEST", query="test project")
+        target_desc = os.path.basename(target_file) if target_file else os.path.basename(target_ws)
+        self.assign_agents_for_intent("AGENT_PROJECT_TEST", query=f"test {target_desc}")
+        perm_level = PermissionLevel.EXECUTE if terminal_allowed else PermissionLevel.OBSERVE
+
         task = self.task_manager.create_task(
-            task_type="project_test",
-            description=f"Inspect and test project '{os.path.basename(target_ws)}'",
+            task_type="file_test" if target_file else "project_test",
+            description=f"Inspect and test '{target_desc}' (Terminal: {'ALLOWED' if terminal_allowed else 'OFF'})",
             assigned_agents=["ProjectAgent"],
-            required_permission=PermissionLevel.OBSERVE,
-            metadata={"workspace": target_ws},
+            required_permission=perm_level,
+            metadata={
+                "workspace": target_ws,
+                "target_file": target_file,
+                "terminal_allowed": terminal_allowed,
+                "target_name": target_name or target_desc,
+                "from_screen": from_screen,
+            },
         )
 
         try:
             result = self.project_agent.run_safe(task)
+            self.last_test_result = result
             summary = result.get("summary")
             if summary:
                 return summary
@@ -114,6 +131,10 @@ class AgentOrchestrator:
                 return "Project testing completed."
         finally:
             self.release_agents(grace_period=3.5)
+
+    def test_file(self, file_path: str, terminal_allowed: bool = False) -> str:
+        """Convenience method to test a specific single file."""
+        return self.test_project(target_file=file_path, terminal_allowed=terminal_allowed)
 
     # -------------------------------------------------------------
     # 2. Background Task Monitoring Workflow

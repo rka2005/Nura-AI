@@ -367,7 +367,41 @@ class ContextMemoryAgent(BaseAgent):
             what_need_to_learn["query_topic"] = "background_status"
             what_need_to_learn["takeaway"] = "User inquired about background activity and processes."
 
-        # 9. Application / File / Desktop Automation / Code Actions
+        # 9. Project & Code File Testing
+        elif "test" in cmd_lower and any(
+            p in cmd_lower for p in ["project", "file", "code", "app", "script", "suite", "workspace", "screen", "current"]
+        ):
+            if execution_success is True:
+                memory_type = "fixed"
+            else:
+                memory_type = "temporary"
+            context_type = "code"
+            task_slug = "project_or_file_testing"
+            target_name = "test_subsystem"
+            if any(p in cmd_lower for p in [".py", ".json", ".js", ".ts", ".html"]):
+                match_ext = re.search(r"(\.[a-zA-Z0-9]+)\b", cmd_raw)
+                if match_ext:
+                    extension = match_ext.group(1).lower()
+            what_need_to_learn["command_intent"] = task_slug
+            what_need_to_learn["takeaway"] = f"Testing requested: {cmd_raw}"
+
+        # 10. System Audibility & Microphone/Speaker Hardware Check
+        elif any(
+            p in cmd_lower
+            for p in [
+                "can you hear me", "am i audible", "are you able to hear me", "can you hear my voice",
+                "can you hear", "can you listen", "check microphone", "test microphone",
+                "check speaker", "check microphone and speaker", "is my microphone working"
+            ]
+        ) or re.search(r"\b(?:hear\s+me|am\s+i\s+audible|audible\s+to\s+you|check\s+(?:my\s+)?(?:mic|microphone|speaker))\b", cmd_lower):
+            memory_type = "fixed" if execution_success is True else "temporary"
+            context_type = "app"
+            task_slug = "audio_hardware_and_audibility_check"
+            target_name = "audio_subsystem"
+            what_need_to_learn["query_topic"] = "audibility_and_audio_devices"
+            what_need_to_learn["takeaway"] = "Inquiry regarding Neura hearing ability and microphone/speaker hardware status."
+
+        # 11. Application / File / Desktop Automation / Code Actions
         elif any(
             p in cmd_lower
             for p in [
@@ -827,7 +861,23 @@ class ContextMemoryAgent(BaseAgent):
                 "• Multi-Agent Systems: Run background surveillance, code syntax diagnostics, and autonomous skill learning."
             )
 
-        # 2. User Feelings & Mood Recall (from temporary_memory.json)
+        # 2. System Audibility & Microphone/Speaker Hardware Status (Zero API Call)
+        if any(
+            p in q
+            for p in [
+                "can you hear me", "am i audible", "are you able to hear me", "can you hear my voice",
+                "can you hear properly", "can you hear", "check microphone", "test microphone",
+                "is my microphone working", "check speaker", "check microphone and speaker", "is my mic working"
+            ]
+        ) or re.search(r"\b(?:hear\s+me|am\s+i\s+audible|audible\s+to\s+you)\b", q):
+            try:
+                from neura import check_microphone_and_speaker_status
+                healthy, info, speech = check_microphone_and_speaker_status()
+                return speech
+            except Exception:
+                return "Yes Sir, I can hear you loud and clear! Your microphone and audio devices are working properly."
+
+        # 3. User Feelings & Mood Recall (from temporary_memory.json)
         # e.g., "how am i feeling?", "what did i say about feeling bored?", "am i bored?", "my mood"
         if any(
             p in q

@@ -1,3 +1,4 @@
+import sys
 import pyttsx3
 import speech_recognition as sr
 import datetime
@@ -32,7 +33,7 @@ import json
 import pyjokes
 import psutil
 from art import text2art
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from memory.memory_manager import MemoryManager
 from brain.conversation import generate_ai_response
@@ -785,6 +786,98 @@ def execute_alert_intent(intent, metadata, raw_query: str = ""):
         else:
             return True, "Sir, please tell me after how many minutes or at what time you would like me to set the alert."
 
+def prompt_user_for_terminal_permission(target_desc: str, timeout: float = 10.0) -> bool:
+    """
+    Prompts user via voice and chat bridge for terminal access permission.
+    Listens for user response via GUI input bridge (text) or microphone (voice).
+    Returns True if permission is granted, False otherwise.
+    """
+    import sys
+    is_test_env = (
+        "unittest" in sys.modules
+        or os.environ.get("NEURA_TEST_MODE") == "1"
+    )
+
+    prompt_text = (
+        f"To test and debug {target_desc}, I need terminal access. "
+        f"Do you grant terminal permission? Please say or type yes to allow, or no for a general test."
+    )
+    speak(prompt_text)
+    send_to_frontend(
+        "neura",
+        f"⚠️ **Terminal Access Permission Required**\n\n"
+        f"To execute dynamic tests and terminal debugging on **{target_desc}**, Neura needs terminal access.\n\n"
+        f"* **Grant Access**: Type or speak `yes`, `allow`, or `grant`\n"
+        f"* **Deny / Safe Test**: Type or speak `no` or `deny` (general static test will be performed)"
+    )
+
+    # In automated test environments without simulated input, do not block
+    if is_test_env:
+        quick_cmd = check_input_bridge()
+        if quick_cmd:
+            norm = quick_cmd.lower().strip()
+            if any(w in norm for w in ["yes", "allow", "grant", "sure", "ok", "okay", "proceed"]):
+                return True
+            if any(w in norm for w in ["no", "deny", "skip", "cancel"]):
+                return False
+        return False
+
+    result_holder = {"permission": None}
+    stop_event = threading.Event()
+
+    def _voice_listener():
+        try:
+            r = sr.Recognizer()
+            try:
+                mic_src = sr.Microphone(device_index=1)
+            except Exception:
+                mic_src = sr.Microphone()
+            with mic_src as source:
+                r.adjust_for_ambient_noise(source, duration=0.25)
+                while not stop_event.is_set():
+                    try:
+                        audio = r.listen(source, timeout=1.5, phrase_time_limit=3.5)
+                        query = r.recognize_google(audio, language='en-in').lower().strip()
+                        print(f"[Terminal Permission] User said: '{query}'")
+                        send_to_frontend("user", query)
+                        if any(w in query for w in ["yes", "yeah", "yep", "allow", "grant", "granted", "sure", "ok", "okay", "go ahead", "run", "do it", "proceed", "terminal"]):
+                            result_holder["permission"] = True
+                            return
+                        if any(w in query for w in ["no", "nope", "deny", "don't", "dont", "no terminal", "cancel", "skip", "without", "general"]):
+                            result_holder["permission"] = False
+                            return
+                    except (sr.WaitTimeoutError, sr.UnknownValueError, sr.RequestError):
+                        continue
+        except Exception:
+            pass
+
+    listener_thread = threading.Thread(target=_voice_listener, daemon=True)
+    listener_thread.start()
+
+    start_time = time.time()
+    while (time.time() - start_time) < timeout:
+        # 1. Check text command from input bridge (responsive every 100ms)
+        bridge_cmd = check_input_bridge()
+        if bridge_cmd:
+            norm = bridge_cmd.lower().strip()
+            print(f"[Terminal Permission] Received chat input: '{norm}'")
+            if any(w in norm for w in ["yes", "yeah", "yep", "allow", "grant", "granted", "sure", "ok", "okay", "go ahead", "run", "do it", "proceed", "terminal"]):
+                stop_event.set()
+                return True
+            if any(w in norm for w in ["no", "nope", "deny", "don't", "dont", "no terminal", "cancel", "skip", "without", "general"]):
+                stop_event.set()
+                return False
+
+        # 2. Check microphone result from listener thread
+        if result_holder["permission"] is not None:
+            stop_event.set()
+            return result_holder["permission"]
+
+        time.sleep(0.1)
+
+    stop_event.set()
+    return False
+
 def execute_agent_intent(intent, metadata, raw_query: str = ""):
     """
     Executes specialized agent workflows via the AgentOrchestrator:
@@ -804,8 +897,106 @@ def execute_agent_intent(intent, metadata, raw_query: str = ""):
     orch.assign_agents_for_intent(intent, metadata, raw_query)
 
     if intent == IntentType.AGENT_PROJECT_TEST:
-        speak("Starting comprehensive project testing and code analysis, Sir.")
-        msg = orch.test_project()
+        target_type = metadata.get("target_type", "project")
+        target_name = metadata.get("target_name")
+        from_screen = metadata.get("from_screen", False)
+        perm_granted = metadata.get("terminal_permission_granted")
+
+        target_file = None
+        target_ws = orch.workspace
+        target_desc = "current project"
+
+        # 1. Screen-based Target Resolution
+        if from_screen or target_type == "screen":
+            screen_info = desktop_ctrl.detect_target_from_screen()
+            sc_proj = screen_info.get("project_name")
+            sc_file = screen_info.get("file_name")
+
+            if target_type == "file" or (target_name and target_name.endswith(('.py', '.js', '.ts', '.html', '.css', '.json'))):
+                target_file = target_name or sc_file
+                target_desc = f"file '{target_file}'"
+            elif sc_file and target_name in ["current_file", "this file"]:
+                target_file = sc_file
+                target_desc = f"active file '{sc_file}'"
+            elif sc_proj:
+                target_desc = f"project '{sc_proj}' on your screen"
+                parent_dir = os.path.dirname(orch.workspace)
+                if os.path.basename(orch.workspace).lower() == sc_proj.lower():
+                    target_ws = orch.workspace
+                elif os.path.exists(os.path.join(orch.workspace, sc_proj)):
+                    target_ws = os.path.join(orch.workspace, sc_proj)
+                elif os.path.exists(os.path.join(parent_dir, sc_proj)):
+                    target_ws = os.path.join(parent_dir, sc_proj)
+            else:
+                target_desc = f"current project '{os.path.basename(target_ws)}'"
+
+        # 2. File-based Target Resolution
+        elif target_type == "file" and target_name:
+            target_file = target_name
+            target_desc = f"file '{target_name}'"
+
+        # 3. Named Project Target Resolution (e.g. "whatsapp bot project")
+        elif target_type == "named_project" and target_name:
+            norm_name = re.sub(r'[^a-zA-Z0-9]', '', target_name.lower())
+            found_folder = None
+            try:
+                for item in os.listdir(orch.workspace):
+                    full_item = os.path.join(orch.workspace, item)
+                    if os.path.isdir(full_item):
+                        if norm_name in re.sub(r'[^a-zA-Z0-9]', '', item.lower()):
+                            found_folder = full_item
+                            break
+            except Exception:
+                pass
+
+            if found_folder:
+                target_ws = found_folder
+                target_desc = f"project '{os.path.basename(found_folder)}'"
+            else:
+                target_desc = f"project '{target_name}'"
+
+        else:
+            target_desc = f"project '{os.path.basename(target_ws)}'"
+
+        # 4. Terminal Permission Gating (Voice / Text confirmation)
+        if perm_granted is True:
+            terminal_allowed = True
+            speak(f"Terminal permission recognized. Accessing terminal to test and debug {target_desc}, Sir.")
+        elif perm_granted is False:
+            terminal_allowed = False
+            speak(f"Terminal access disabled. Performing general static analysis on {target_desc}, Sir.")
+        else:
+            terminal_allowed = prompt_user_for_terminal_permission(target_desc)
+            if terminal_allowed:
+                speak("Terminal access granted, Sir. Accessing terminal to run dynamic tests and debugging.")
+                send_to_frontend("neura", "✅ **Terminal Access: GRANTED**. Accessing terminal to run test suites and debugging...")
+            else:
+                speak("Terminal access not granted, Sir. Performing general static test without terminal execution.")
+                send_to_frontend("neura", "ℹ️ **Terminal Access: NOT GRANTED**. Performing general static test without terminal execution...")
+
+        # 5. Execute Project / File Testing via Orchestrator
+        if target_file:
+            msg = orch.test_project(
+                workspace=target_ws,
+                target_file=target_file,
+                terminal_allowed=terminal_allowed,
+                target_name=target_desc,
+                from_screen=from_screen
+            )
+        else:
+            msg = orch.test_project(
+                workspace=target_ws,
+                terminal_allowed=terminal_allowed,
+                target_name=target_desc,
+                from_screen=from_screen
+            )
+
+        # 6. Push Full Markdown Report to Frontend Chat
+        if hasattr(orch, "last_test_result") and orch.last_test_result:
+            full_report = orch.last_test_result.get("full_report")
+            if full_report:
+                send_to_frontend("neura", full_report)
+
         orch.release_agents(grace_period=3.5)
         return True, msg
 
@@ -931,6 +1122,16 @@ def ask_neura(user_message):
         speak(res)
         remember_interaction(user_message_clean, res)
         log_activity(f"Alert {intent}: {res[:40]}")
+        return res
+
+    # Check Audibility & Microphone/Speaker Hardware Check (Zero API Call)
+    handled, res = execute_audibility_check_intent(intent, metadata, user_message_clean)
+    if handled:
+        orch.release_agents(grace_period=3.5)
+        speak(res)
+        remember_interaction(user_message_clean, res)
+        orch.memory_agent.record_task_success(user_message_clean, str(intent), res)
+        log_activity(f"Audibility Check {intent}: {res[:40]}")
         return res
 
     # Multi-Agent Orchestration Check
@@ -1121,6 +1322,13 @@ def ask_neura(user_message):
                 return response
 
             else:
+                # 4.5. Guard: If an audibility query reached here, check hardware with Zero API Calls
+                if any(p in um_lower for p in ["can you hear me", "am i audible", "hear my voice", "are you able to hear me", "can you hear", "check microphone", "check speaker"]):
+                    handled, res = execute_audibility_check_intent(IntentType.SYSTEM_AUDIBILITY_CHECK, {}, user_message_clean)
+                    if handled:
+                        speak(res)
+                        return res
+
                 # 5. Fallback to Brain LLM for natural human conversations and reasoning
                 response = generate_ai_response(user_message_clean, memory_mgr)
                 print(f"{IDENTITY['name']}: {response}")
@@ -2160,7 +2368,158 @@ def get_system_condition():
     return "System condition: " + ", ".join(details) + "."
 
 
-def execute_system_diagnostic_intent(intent):
+def check_microphone_and_speaker_status() -> Tuple[bool, Dict[str, Any], str]:
+    """
+    Actively inspects the microphone (default input device, channels, format) and
+    speaker (output endpoint, volume level scalar, mute state) to verify if Neura
+    can hear audio properly and speak audibly to the user.
+    Returns (healthy: bool, details_dict: dict, verbal_response: str).
+    """
+    mic_name = "Default Microphone"
+    mic_healthy = False
+    mic_channels = 1
+    mic_rate = 44100
+    mic_index = 1
+
+    try:
+        p = sr.Microphone.get_pyaudio().PyAudio()
+        try:
+            default_info = p.get_default_input_device_info()
+            mic_name = default_info.get("name", "Default Microphone")
+            mic_channels = default_info.get("maxInputChannels", 1)
+            mic_rate = int(default_info.get("defaultSampleRate", 44100))
+            mic_index = default_info.get("index", 1)
+            mic_healthy = (mic_channels > 0)
+        except Exception:
+            try:
+                dev_info = p.get_device_info_by_index(1)
+                mic_name = dev_info.get("name", "Microphone Array")
+                mic_channels = dev_info.get("maxInputChannels", 1)
+                mic_rate = int(dev_info.get("defaultSampleRate", 44100))
+                mic_healthy = (mic_channels > 0)
+            except Exception:
+                names = sr.Microphone.list_microphone_names()
+                if names:
+                    mic_name = names[0]
+                    mic_healthy = True
+        finally:
+            p.terminate()
+    except Exception as e:
+        mic_name = f"Microphone Unavailable ({e})"
+        mic_healthy = False
+
+    clean_mic_name = mic_name.replace("\r", "").replace("\n", "").strip()
+
+    speaker_name = "Speakers"
+    volume_level = 100
+    is_muted = False
+    speaker_healthy = False
+
+    try:
+        speakers = AudioUtilities.GetSpeakers()
+        if hasattr(speakers, "FriendlyName") and speakers.FriendlyName:
+            speaker_name = speakers.FriendlyName
+        vol_ctrl = get_volume_controller()
+        if vol_ctrl is not None:
+            scalar = vol_ctrl.GetMasterVolumeLevelScalar()
+            volume_level = int(round(scalar * 100))
+            is_muted = bool(vol_ctrl.GetMute())
+            speaker_healthy = True
+    except Exception as e:
+        speaker_name = f"Speakers Unavailable ({e})"
+
+    clean_speaker_name = speaker_name.replace("\r", "").replace("\n", "").strip()
+
+    can_hear = mic_healthy
+    can_speak = speaker_healthy and (volume_level > 0) and (not is_muted)
+
+    details = {
+        "microphone": {
+            "name": clean_mic_name,
+            "healthy": mic_healthy,
+            "channels": mic_channels,
+            "sample_rate": mic_rate,
+            "device_index": mic_index,
+        },
+        "speaker": {
+            "name": clean_speaker_name,
+            "healthy": speaker_healthy,
+            "volume": volume_level,
+            "is_muted": is_muted,
+        },
+        "can_hear": can_hear,
+        "can_speak": can_speak,
+    }
+
+    if can_hear and can_speak:
+        speech = (
+            f"Yes Sir, I can hear you loud and clear! I checked your audio devices: "
+            f"your microphone ({clean_mic_name}) is working properly and receiving audio, "
+            f"and your speaker ({clean_speaker_name}) is active at {volume_level} percent volume and unmuted. "
+            f"You are completely audible to me."
+        )
+    elif can_hear and is_muted:
+        speech = (
+            f"Yes Sir, I can hear you clearly! Your microphone ({clean_mic_name}) is working properly, "
+            f"but note that your speaker ({clean_speaker_name}) is currently muted. "
+            f"Please unmute your speaker so you can hear my voice."
+        )
+    elif can_hear and volume_level == 0:
+        speech = (
+            f"Yes Sir, I can hear you! Your microphone ({clean_mic_name}) is working properly, "
+            f"but your speaker volume is currently at 0 percent."
+        )
+    elif not can_hear and speaker_healthy:
+        speech = (
+            f"Sir, I checked your audio devices: I am having trouble detecting an active microphone ({clean_mic_name}), "
+            f"though your speaker ({clean_speaker_name}) is working at {volume_level} percent volume. "
+            f"Please verify that your microphone is plugged in and allowed in Windows settings."
+        )
+    else:
+        speech = (
+            f"Sir, I checked your audio devices: your microphone status is {clean_mic_name} "
+            f"and speaker status is {clean_speaker_name} at {volume_level} percent volume."
+        )
+
+    return can_hear, details, speech
+
+
+def execute_audibility_check_intent(intent, metadata=None, raw_query: str = "") -> Tuple[bool, str]:
+    """
+    Executes audibility check without external LLM API calls:
+    Inspects microphone and speaker hardware and sends an audio status report to the frontend.
+    """
+    if intent != IntentType.SYSTEM_AUDIBILITY_CHECK:
+        rq = raw_query.lower()
+        if not (
+            any(p in rq for p in ["can you hear me", "am i audible", "are you able to hear me", "can you hear my voice", "check microphone", "check speaker", "can you hear properly"])
+            or re.search(r"\b(?:hear\s+me|am\s+i\s+audible|audible\s+to\s+you)\b", rq)
+        ):
+            return False, ""
+
+    can_hear, details, speech = check_microphone_and_speaker_status()
+
+    mic = details["microphone"]
+    spk = details["speaker"]
+    mute_label = "Muted ⚠️" if spk["is_muted"] else "Unmuted ✅"
+    mic_status_label = "Active & Receiving Audio ✅" if mic["healthy"] else "Not Detected ❌"
+
+    card = (
+        f"🎤 **Audio Hardware & Audibility Status**\n\n"
+        f"• **Microphone**: {mic['name']} ({mic_status_label})\n"
+        f"  - Channels: {mic['channels']} | Sample Rate: {mic['sample_rate']} Hz\n"
+        f"• **Speaker**: {spk['name']} (Active at {spk['volume']}% | {mute_label})\n"
+        f"• **Audibility Verdict**: {'100% Audible & Functioning Properly ✅' if can_hear else 'Microphone Inactive ⚠️'}\n\n"
+        f"*{speech}*"
+    )
+
+    send_to_frontend("neura", card)
+    return True, speech
+
+
+def execute_system_diagnostic_intent(intent, metadata=None, raw_query: str = ""):
+    if intent == IntentType.SYSTEM_AUDIBILITY_CHECK:
+        return execute_audibility_check_intent(intent, metadata or {}, raw_query)
     if intent == IntentType.SYSTEM_NETWORK_SPEED:
         return True, get_network_speed()
     if intent == IntentType.SYSTEM_CONDITION:
@@ -2288,6 +2647,16 @@ if __name__ == "__main__":
             remember_interaction(query, res)
             agent_orchestrator.memory_agent.record_task_success(query, str(intent), res)
             log_activity(f"Alert {intent}: {res[:40]}")
+            continue
+
+        # Check Audibility & Microphone/Speaker Hardware Check (Zero API Call)
+        handled, res = execute_audibility_check_intent(intent, metadata, query)
+        if handled:
+            agent_orchestrator.release_agents(grace_period=3.5)
+            speak(res)
+            remember_interaction(query, res)
+            agent_orchestrator.memory_agent.record_task_success(query, str(intent), res)
+            log_activity(f"Audibility Check {intent}: {res[:40]}")
             continue
 
         # Check Multi-Agent Subsystem first

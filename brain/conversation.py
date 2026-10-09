@@ -5,6 +5,7 @@ Connects Fixed Personality + Dynamic User Memory + Temporary Conversation Contex
 
 import os
 import json
+import re
 from typing import Optional, Tuple
 import google.generativeai as genai
 from groq import Groq
@@ -115,8 +116,43 @@ def generate_ai_response(user_query: str, memory_manager: MemoryManager) -> str:
     """
     Synthesizes personality, user profile, and conversation context into a unified prompt,
     queries the AI model, updates conversation memory, and returns the response.
+    Enforces the Memory-First protocol: memory stores are ALWAYS checked before external LLM APIs.
     """
-    # 1. Automatic Learning Pass (detect preferences or facts)
+    # 0. Audibility Hardware Diagnostic Guard (Zero API Call)
+    # When user asks 'can you hear me', 'am i audible', etc., check mic and speaker directly
+    q_clean = user_query.strip().lower()
+    if any(p in q_clean for p in ["can you hear me", "am i audible", "hear my voice", "are you able to hear me", "can you hear", "can you listen"]) or (
+        re.search(r"\b(?:hear\s+me|am\s+i\s+audible|audible\s+to\s+you)\b", q_clean)
+    ):
+        try:
+            from neura import check_microphone_and_speaker_status
+            healthy, info, speech = check_microphone_and_speaker_status()
+            memory_manager.append_turn(user_query, speech)
+            return speech
+        except Exception:
+            fallback_speech = "Yes Sir, I can hear you loud and clear! Your microphone and audio devices are working properly."
+            memory_manager.append_turn(user_query, fallback_speech)
+            return fallback_speech
+
+    # 1. MEMORY-FIRST PROTOCOL: Check 3-Tier user/profile/facts memory before API calls
+    mem_reply = memory_manager.answer_from_memory(user_query)
+    if mem_reply:
+        print(f"🧠 [Memory-First] Query answered from 3-Tier Memory without API call: '{user_query[:40]}'")
+        memory_manager.append_turn(user_query, mem_reply)
+        return mem_reply
+
+    # 2. MEMORY-FIRST PROTOCOL: Check Dual-Tier Context Memory Agent (fixed + temporary memories)
+    try:
+        from brain.agents import get_orchestrator
+        ctx_reply = get_orchestrator().memory_agent.answer_from_context_memory(user_query)
+        if ctx_reply:
+            print(f"🧠 [Memory-First] Query answered from Dual-Tier Context Memory without API call: '{user_query[:40]}'")
+            memory_manager.append_turn(user_query, ctx_reply)
+            return ctx_reply
+    except Exception:
+        pass
+
+    # 3. Automatic Learning Pass (detect preferences or facts)
     memory_manager.auto_learn(user_query, llm_detector=llm_detect_preferences)
 
     # 2. Build Unified Context

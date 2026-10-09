@@ -31,6 +31,7 @@ class IntentType:
     SYSTEM_PERMISSION = "SYSTEM_PERMISSION"
     SYSTEM_BACKGROUND_STATUS = "SYSTEM_BACKGROUND_STATUS"
     SYSTEM_SCREEN_AND_BACKGROUND_STATUS = "SYSTEM_SCREEN_AND_BACKGROUND_STATUS"
+    SYSTEM_AUDIBILITY_CHECK = "SYSTEM_AUDIBILITY_CHECK"
     
     MEMORY_CLEAR = "MEMORY_CLEAR"
     MEMORY_INSPECT = "MEMORY_INSPECT"
@@ -263,15 +264,25 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
     ]) or re.search(r"\b(?:check|scan|audit|find|tell|show|report)\s+(?:only\s+)?(?:the\s+)?(?:major\s+)?vulnerabilit\w*\b", q):
         return IntentType.AGENT_VULNERABILITY_SCAN, {}
 
-    # Multi-Agent Subsystem: Comprehensive Project Testing Workflow
-    # "Neura, test my project", "test this project", "inspect my project", "run project tests", "test", "testing", "run tests"
+    # Multi-Agent Subsystem: Comprehensive Project & File Testing Workflow
+    # "Neura, test my project", "test this project", "can you please test this current project",
+    # "test current project on the screen", "test current project that you can see",
+    # "can you test this whatsapp bot project", "test specific file app.py", "test file neura.py", "test this file"
     is_project_test = (
-        re.search(r"\b(?:test|inspect|audit|check)\s+(?:my\s+|this\s+|the\s+)?(?:project|codebase|code|application|app|system|repo|repository)\b", q)
+        re.search(r"\b(?:test|inspect|audit|check|diagnose|debug)\s+(?:(?:can\s+you\s+|please\s+|out\s+|my\s+|this\s+|the\s+|a\s+|current\s+|active\s+|visible\s+|open\s+|screen\s+|specific\s+|particular\s+)*)(?:[\w\-]+(?:\s+[\w\-]+)*\s+)?(?:project|codebase|code|application|app|system|repo|repository|file|script|module)\b", q)
+        or re.search(r"\b(?:test|inspect|audit|check|verify|run\s+tests?\s+on)\s+(?:(?:my|this|the|a|current|active|visible|open)\s+)?(?:project|code|file|script)\s+(?:on|in|from)\s+(?:the\s+|my\s+)?screen\b", q)
+        or re.search(r"\b(?:test|inspect|audit|check)\s+(?:what|whatever)\s+you\s+(?:can\s+)?see\s+(?:on\s+(?:the\s+|my\s+)?screen)?\b", q)
+        or re.search(r"\b(?:test|inspect|audit|check)\s+(?:current\s+project|project\s+on\s+screen|project\s+on\s+the\s+screen|project\s+that\s+you\s+can\s+see)\b", q)
+        or re.search(r"\b(?:test|inspect|audit|check)\s+(?:specific\s+file|file|script)\s+([a-zA-Z0-9_\-\./\\]+)\b", q)
+        or re.search(r"\b(?:test|inspect|audit|check)\s+([a-zA-Z0-9_\-]+\.(?:py|js|ts|jsx|tsx|html|css|json))\b", q)
         or re.search(r"\b(?:run|start|execute|perform|do|begin)\s+(?:the\s+|all\s+|project\s+|unit\s+|code\s+)?tests?\b", q)
         or re.search(r"\b(?:start|begin|do|perform)\s+testing\b", q)
         or q in ['test', 'testing', 'run tests', 'run test', 'start testing', 'test it', 'test this', 'test now', 'test all', 'test everything', 'run all tests']
         or any(p in q for p in [
             'test my project', 'test this project', 'test the project', 'test project',
+            'test current project', 'test the current project', 'test current project on the screen',
+            'test current project that you can see', 'test project on the screen', 'test project on my screen',
+            'test what you see on the screen', 'test this file', 'test the file on the screen',
             'run project tests', 'run tests on my project', 'inspect project', 'audit project',
             'test the codebase', 'test codebase', 'test code', 'run unit tests', 'run the tests',
             'test the app', 'test application', 'test system', 'test neura'
@@ -279,7 +290,60 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
     ) and not any(k in q for k in ['internet', 'speed', 'voice', 'microphone', 'mic'])
 
     if is_project_test:
-        return IntentType.AGENT_PROJECT_TEST, {}
+        proj_meta = {}
+
+        # 1. Terminal Permission Cues
+        if any(p in q for p in ['with terminal permission', 'with terminal access', 'allow terminal', 'grant terminal', 'give terminal access', 'terminal permission granted', 'use terminal', 'access terminal', 'in terminal']):
+            proj_meta["terminal_permission_granted"] = True
+        elif any(p in q for p in ['without terminal', 'no terminal', 'dont access terminal', "don't access terminal", 'deny terminal', 'no terminal access', 'without terminal access']):
+            proj_meta["terminal_permission_granted"] = False
+        else:
+            proj_meta["terminal_permission_granted"] = None
+
+        # 2. Screen Inspection Flag
+        is_screen = any(p in q for p in [
+            'on screen', 'on the screen', 'on my screen', 'in the screen',
+            'that you can see', 'you can see', 'what you see', 'visible', 'current screen',
+            'see in my screen', 'see on the screen', 'see on my screen'
+        ])
+        proj_meta["from_screen"] = is_screen
+
+        # 3. Detect File vs Project vs Screen Target
+        file_match = re.search(r"\b(?:specific\s+file|file|script)\s+([a-zA-Z0-9_\-\./\\]+)\b", q)
+        ext_match = re.search(r"\b([a-zA-Z0-9_\-]+\.(?:py|js|ts|jsx|tsx|html|css|json|cpp|c|java|go|rs|rb|php))\b", q)
+
+        if file_match and not any(file_match.group(1).lower().startswith(x) for x in ['on', 'in', 'at', 'that', 'with', 'from', 'to']):
+            proj_meta["target_type"] = "file"
+            proj_meta["target_name"] = file_match.group(1).strip()
+        elif ext_match and not any(ext_match.group(1).lower().startswith(x) for x in ['test', 'run', 'do']):
+            proj_meta["target_type"] = "file"
+            proj_meta["target_name"] = ext_match.group(1).strip()
+        elif any(p in q for p in ['this file', 'current file', 'active file', 'the file on screen', 'the file on the screen', 'file on the screen']):
+            proj_meta["target_type"] = "file"
+            proj_meta["target_name"] = "current_file"
+            proj_meta["from_screen"] = True
+        else:
+            named_proj = re.search(r"\b(?:test|inspect|audit|check)\s+(?:(?:can\s+you\s+|please\s+|my\s+|this\s+|the\s+|a\s+)*)([\w\-\s]+?)\s+project\b", q)
+            if named_proj:
+                extracted_name = named_proj.group(1).strip()
+                cleaned_name = re.sub(r"^(?:current|this|my|the|a|active|visible)\s*", "", extracted_name, flags=re.IGNORECASE).strip()
+                if cleaned_name and cleaned_name.lower() not in ["", "current", "this", "my", "the", "a"]:
+                    proj_meta["target_type"] = "named_project"
+                    proj_meta["target_name"] = cleaned_name
+                elif is_screen:
+                    proj_meta["target_type"] = "screen"
+                    proj_meta["target_name"] = "screen_project"
+                else:
+                    proj_meta["target_type"] = "project"
+                    proj_meta["target_name"] = "current_project"
+            elif is_screen:
+                proj_meta["target_type"] = "screen"
+                proj_meta["target_name"] = "screen_project"
+            else:
+                proj_meta["target_type"] = "project"
+                proj_meta["target_name"] = "current_project"
+
+        return IntentType.AGENT_PROJECT_TEST, proj_meta
 
     # Multi-Agent Subsystem: Multi-Agent Failure Investigation & Diagnostic
     # "find out why my project is failing", "why is my project crashing", "check what's wrong with my project"
@@ -683,6 +747,33 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
     if list_files_match and ('list' in q or 'show files' in q):
         target_f = (list_files_match.group(1) or "").strip()
         return IntentType.FILE_LIST, {"path": target_f}
+
+    # System Audibility & Microphone/Speaker Hardware Check
+    # "can you hear me", "am i audible", "are you able to hear me", "can you hear my voice", "check microphone", etc.
+    audibility_match = (
+        re.search(r"\b(?:can\s+you|are\s+you\s+able\s+to|do\s+you|able\s+to)\s+(?:hear\s+me|hear\s+my\s+voice|hear\s+us|listen\s+to\s+me|listen\s+me|hear\s+properly|hear)\b", q)
+        or re.search(r"\b(?:am\s+i|i\s+am)\s+(?:audible|audible\s+to\s+you|clear\s+and\s+audible|speaking\s+audibly)\b", q)
+        or re.search(r"\b(?:can\s+you\s+hear|do\s+you\s+hear|hear\s+properly)\b", q)
+        or re.search(r"\b(?:check|test|verify|inspect)\s+(?:if\s+you\s+(?:can\s+)?hear\s+me|my\s+mic|my\s+microphone|microphone\s+and\s+speaker|mic\s+and\s+speaker|microphone|speaker|audio\s+devices)\b", q)
+        or re.search(r"\b(?:is\s+my\s+mic|is\s+my\s+microphone|are\s+my\s+speakers?)\s+(?:working|functioning|ok|okay|connected|on)\b", q)
+        or ("hear me" in q or "audible" in q)
+        or (("microphone" in q or "mic" in q) and ("speaker" in q or "working" in q or "check" in q or "test" in q))
+        or q in [
+            'can you hear me', 'can u hear me', 'can you hear me now', 'can you hear me or not',
+            'can you hear me clearly', 'am i audible', 'am i audible to you', 'am i audible or not',
+            'am i audible now', 'are you able to hear me', 'can you hear my voice', 'can you listen to me',
+            'are you hearing me', 'can you hear', 'can you hear properly', 'can you hear properly or not',
+            'check microphone', 'check my mic', 'test microphone',
+            'check speaker', 'check my speaker', 'check microphone and speaker', 'check mic and speaker'
+        ]
+        or any(p in q for p in [
+            'can you hear me', 'am i audible', 'are you able to hear me', 'can you hear my voice',
+            'can you listen to me', 'check my microphone', 'test my microphone', 'is my microphone working',
+            'check microphone and speaker', 'check mic and speaker', 'can you hear properly'
+        ])
+    )
+    if audibility_match:
+        return IntentType.SYSTEM_AUDIBILITY_CHECK, {}
 
     # System controls - Volume
     if any(v in q for v in ['volume up', 'increase volume', 'louder']):
