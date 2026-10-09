@@ -1,6 +1,14 @@
 import pyttsx3
 import speech_recognition as sr
 import datetime
+
+# Sarvam AI voice integration
+import asyncio
+import base64
+import tempfile
+import pygame
+import websockets
+
 import wikipedia
 import webbrowser
 import os
@@ -182,16 +190,180 @@ def analyze_memory_on_start():
         print(f"📝 Previous conversation summary: {summary[:80]}...")
     print(f"💬 Active conversation window turns: {len(recent) // 2}")
 
+# Sarvam AI voice generation
+
+async def _generate_sarvam_audio(text):
+    """Generate speech using Sarvam AI's WebSocket TTS API."""
+
+    api_key = os.getenv("SARVAM_API_KEY")
+    if not api_key:
+        raise RuntimeError("SARVAM_API_KEY is missing from .env")
+
+    uri = (
+        "wss://api.sarvam.ai/text-to-speech/ws"
+        "?model=bulbul:v4-flash&send_completion_event=true"
+    )
+
+    audio_chunks = []
+
+    async with websockets.connect(
+        uri,
+        additional_headers={
+            "Api-Subscription-Key": api_key
+        },
+        open_timeout=20,
+        close_timeout=10,
+    ) as ws:
+
+        await ws.send(json.dumps({
+            "type": "config",
+            "data": {
+                "model": "bulbul:v4-flash",
+                "target_language_code": "en-IN",
+                "speaker": "ishita_enhi_companion",
+                "pace": 1,
+                "speech_sample_rate": "24000",
+            },
+        }))
+
+        await ws.send(json.dumps({
+            "type": "text",
+            "data": {"text": text},
+        }))
+
+        await ws.send(json.dumps({"type": "flush"}))
+
+        async for raw in ws:
+            message = json.loads(raw)
+            message_type = message.get("type")
+
+            if message_type == "audio":
+                encoded_audio = message.get(
+                    "data", {}
+                ).get("audio")
+
+                if encoded_audio:
+                    audio_chunks.append(
+                        base64.b64decode(encoded_audio)
+                    )
+
+            elif message_type == "error":
+                raise RuntimeError(
+                    message.get("data", {}).get(
+                        "message", str(message)
+                    )
+                )
+
+            elif message_type == "event":
+                if message.get("data", {}).get(
+                    "event_type"
+                ) == "final":
+                    break
+
+    if not audio_chunks:
+        raise RuntimeError("Sarvam returned no audio data.")
+
+    return b"".join(audio_chunks)
+
+
+def _play_sarvam_audio(audio_bytes):
+    """Play the generated MP3 audio on Windows."""
+
+    audio_path = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            suffix=".mp3",
+            delete=False,
+        ) as audio_file:
+            audio_path = audio_file.name
+            audio_file.write(audio_bytes)
+
+        if not pygame.mixer.get_init():
+            pygame.mixer.init()
+
+        pygame.mixer.music.load(audio_path)
+        pygame.mixer.music.play()
+
+        while pygame.mixer.music.get_busy():
+            time.sleep(0.05)
+
+    finally:
+        try:
+            if pygame.mixer.get_init():
+                pygame.mixer.music.stop()
+                pygame.mixer.music.unload()
+                pygame.mixer.quit()
+        except Exception:
+            pass
+
+        if audio_path and os.path.exists(audio_path):
+            try:
+                os.remove(audio_path)
+            except OSError:
+                pass
 
 def speak(audio):
-    engine = pyttsx3.init('sapi5')
-    voices = engine.getProperty('voices')
-    engine.setProperty('voice', voices[1].id)
-    engine.setProperty('rate', 180)
+    """Speak through Sarvam AI, falling back to Windows TTS."""
 
-    send_to_frontend("neura", audio)
-    engine.say(audio)
-    engine.runAndWait()
+    if audio is None:
+        return
+
+    text = str(audio).strip()
+    if not text:
+        return
+
+    # Preserve Neura's existing frontend chat integration.
+    send_to_frontend("neura", text)
+
+    # Prefer Sarvam AI voice.
+    try:
+        print("[Neura Voice] Generating Sarvam speech...", flush=True)
+
+        audio_bytes = asyncio.run(
+            _generate_sarvam_audio(text)
+        )
+
+        _play_sarvam_audio(audio_bytes)
+
+        print("[Neura Voice] Speech completed.", flush=True)
+        return
+
+    except Exception as exc:
+        print(
+            f"[Sarvam TTS Error] {type(exc).__name__}: {exc}",
+            flush=True,
+        )
+        print(
+            "[Neura Voice] Falling back to Windows speech.",
+            flush=True,
+        )
+
+    # Fallback: your original local TTS.
+    engine = None
+
+    try:
+        engine = pyttsx3.init("sapi5")
+        voices = engine.getProperty("voices")
+
+        if len(voices) > 1:
+            engine.setProperty("voice", voices[1].id)
+
+        engine.setProperty("rate", 180)
+        engine.setProperty("volume", 1.0)
+
+        engine.say(text)
+        engine.runAndWait()
+
+    except Exception as exc:
+        print(f"[Windows TTS Error] {exc}", flush=True)
+
+    finally:
+        if engine is not None:
+            try:
+                engine.stop()
+            except Exception:
+                pass
 
 
 def wishMe():
@@ -504,6 +676,115 @@ def execute_youtube_search_intent(intent, metadata):
         print(f"YouTube search error: {e}")
         return True, f"I encountered an error trying to search YouTube: {e}"
 
+def execute_alert_intent(intent, metadata, raw_query: str = ""):
+    """
+    Executes Alert, Alarm, and Reminder commands:
+    - SYSTEM_ALERT_SET: Schedules new alert/alarm with relative offset calculation.
+    - SYSTEM_ALERT_LIST: Returns overview of pending alerts.
+    - SYSTEM_ALERT_CANCEL: Cancels alerts matching criteria or all alerts.
+    - SYSTEM_ALERT_STOP: Silences ringing alarms.
+    - SYSTEM_REMINDER: Backwards-compatible alias for reminders.
+    """
+    valid_intents = [
+        getattr(IntentType, "SYSTEM_ALERT_SET", "SYSTEM_ALERT_SET"),
+        getattr(IntentType, "SYSTEM_ALERT_LIST", "SYSTEM_ALERT_LIST"),
+        getattr(IntentType, "SYSTEM_ALERT_CANCEL", "SYSTEM_ALERT_CANCEL"),
+        getattr(IntentType, "SYSTEM_ALERT_STOP", "SYSTEM_ALERT_STOP"),
+        getattr(IntentType, "SYSTEM_REMINDER", "SYSTEM_REMINDER"),
+    ]
+    if intent not in valid_intents:
+        return False, ""
+
+    from brain.alert_service import get_alert_service, parse_alert_request
+    service = get_alert_service(voice_speaker_fn=speak)
+
+    if intent == getattr(IntentType, "SYSTEM_ALERT_STOP", "SYSTEM_ALERT_STOP"):
+        service.stop_ringing()
+        return True, "Alarm has been silenced, Sir."
+
+    if intent == getattr(IntentType, "SYSTEM_ALERT_LIST", "SYSTEM_ALERT_LIST"):
+        summary = service.format_active_alerts_summary()
+        return True, summary
+
+    if intent == getattr(IntentType, "SYSTEM_ALERT_CANCEL", "SYSTEM_ALERT_CANCEL"):
+        target_label = metadata.get("label", "all")
+        count, msg = service.cancel_alerts(target_label)
+        return True, msg
+
+    # SYSTEM_ALERT_SET or SYSTEM_REMINDER
+    if metadata.get("success") and metadata.get("delay_seconds"):
+        delay = float(metadata["delay_seconds"])
+        label = metadata.get("label", "Alarm")
+        target_dt = metadata.get("target_time")
+        explanation = metadata.get("explanation", "")
+        trigger_speech = metadata.get("trigger_speech")
+
+        service.schedule_alert(
+            label=label,
+            delay_seconds=delay,
+            target_time=target_dt,
+            explanation=explanation,
+            source_query=raw_query,
+            trigger_speech=trigger_speech
+        )
+
+        from brain.alert_service import format_duration_friendly
+        clean_lbl = label
+        for p in ["that i have", "i have", "there is", "we have"]:
+            if clean_lbl.lower().startswith(p):
+                clean_lbl = clean_lbl[len(p):].strip()
+        clean_lbl = re.sub(r"^(?:an?|the|your|my)\s+", "", clean_lbl, flags=re.IGNORECASE).strip()
+        clean_lbl = re.sub(r"\s*\(in\s+[^)]+\)", "", clean_lbl).strip()
+
+        if clean_lbl.lower() not in ["alarm", "timer", "scheduled task", "alert me"]:
+            resp = f"Sure Sir! I am setting an alert for {format_duration_friendly(delay)} from now for your {clean_lbl.lower()}. I will remind you when it's time."
+        else:
+            resp = f"Sure Sir! I am setting an alert for {format_duration_friendly(delay)} from now. I will notify you when it's time."
+        return True, resp
+    else:
+        # Fallback parsing in case metadata was empty or came from generic SYSTEM_REMINDER
+        data = parse_alert_request(raw_query)
+        if data.get("action") == "list":
+            return True, service.format_active_alerts_summary()
+        elif data.get("action") == "cancel":
+            count, msg = service.cancel_alerts(data.get("label", "all"))
+            return True, msg
+        elif data.get("action") == "stop":
+            service.stop_ringing()
+            return True, "Alarm has been silenced, Sir."
+        elif data.get("success") and data.get("delay_seconds"):
+            delay = float(data["delay_seconds"])
+            label = data.get("label", "Alarm")
+            target_dt = data.get("target_time")
+            explanation = data.get("explanation", "")
+            trigger_speech = data.get("trigger_speech")
+
+            service.schedule_alert(
+                label=label,
+                delay_seconds=delay,
+                target_time=target_dt,
+                explanation=explanation,
+                source_query=raw_query,
+                trigger_speech=trigger_speech
+            )
+            from brain.alert_service import format_duration_friendly
+            clean_lbl = label
+            for p in ["that i have", "i have", "there is", "we have"]:
+                if clean_lbl.lower().startswith(p):
+                    clean_lbl = clean_lbl[len(p):].strip()
+            clean_lbl = re.sub(r"^(?:an?|the|your|my)\s+", "", clean_lbl, flags=re.IGNORECASE).strip()
+            clean_lbl = re.sub(r"\s*\(in\s+[^)]+\)", "", clean_lbl).strip()
+
+            if clean_lbl.lower() not in ["alarm", "timer", "scheduled task", "alert me"]:
+                resp = f"Sure Sir! I am setting an alert for {format_duration_friendly(delay)} from now for your {clean_lbl.lower()}. I will remind you when it's time."
+            else:
+                resp = f"Sure Sir! I am setting an alert for {format_duration_friendly(delay)} from now. I will notify you when it's time."
+            return True, resp
+        elif data.get("error"):
+            return True, f"Sir, I could not set that alert: {data['error']}"
+        else:
+            return True, "Sir, please tell me after how many minutes or at what time you would like me to set the alert."
+
 def execute_agent_intent(intent, metadata, raw_query: str = ""):
     """
     Executes specialized agent workflows via the AgentOrchestrator:
@@ -638,6 +919,14 @@ def ask_neura(user_message):
 
     # Check Desktop Automation or File CRUD first (Zero API Call)
     intent, metadata = route_intent(user_message_clean)
+
+    # Check Alert / Alarm Subsystem
+    handled, res = execute_alert_intent(intent, metadata, user_message_clean)
+    if handled:
+        speak(res)
+        remember_interaction(user_message_clean, res)
+        log_activity(f"Alert {intent}: {res[:40]}")
+        return res
 
     # Multi-Agent Orchestration Check
     handled, res = execute_agent_intent(intent, metadata, user_message_clean)
@@ -1932,6 +2221,9 @@ if __name__ == "__main__":
         elif pref_songs:
             speak(f"You've told me you like {pref_songs} music.")
 
+    from brain.alert_service import get_alert_service
+    get_alert_service(voice_speaker_fn=speak)
+
     reminder_thread = threading.Thread(target=check_reminders, daemon=True)
     reminder_thread.start()
 
@@ -1979,8 +2271,17 @@ if __name__ == "__main__":
             except Exception:
                 pass
 
-        # Check Multi-Agent Subsystem first
+        # Check Alert / Alarm Subsystem
         intent, metadata = route_intent(query)
+        handled, res = execute_alert_intent(intent, metadata, query)
+        if handled:
+            speak(res)
+            remember_interaction(query, res)
+            agent_orchestrator.memory_agent.record_task_success(query, str(intent), res)
+            log_activity(f"Alert {intent}: {res[:40]}")
+            continue
+
+        # Check Multi-Agent Subsystem first
         handled, res = execute_agent_intent(intent, metadata, query)
         if handled:
             speak(res)

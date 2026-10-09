@@ -4,6 +4,7 @@ from brain.intent_router import route_intent, IntentType
 from brain.desktop_controller import DesktopController
 from brain.file_manager import FileManager
 from brain.screen_vision import ScreenVision
+from brain.alert_service import AlertService, get_alert_service, parse_alert_request
 
 __all__ = [
     "get_personality_prompt",
@@ -14,5 +15,8 @@ __all__ = [
     "IntentType",
     "DesktopController",
     "FileManager",
-    "ScreenVision"
+    "ScreenVision",
+    "AlertService",
+    "get_alert_service",
+    "parse_alert_request"
 ]

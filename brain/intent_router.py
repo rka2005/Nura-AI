@@ -16,6 +16,10 @@ class IntentType:
     SYSTEM_APP_CLOSE = "SYSTEM_APP_CLOSE"
     SYSTEM_NOTES = "SYSTEM_NOTES"
     SYSTEM_REMINDER = "SYSTEM_REMINDER"
+    SYSTEM_ALERT_SET = "SYSTEM_ALERT_SET"
+    SYSTEM_ALERT_LIST = "SYSTEM_ALERT_LIST"
+    SYSTEM_ALERT_CANCEL = "SYSTEM_ALERT_CANCEL"
+    SYSTEM_ALERT_STOP = "SYSTEM_ALERT_STOP"
     SYSTEM_MEDIA = "SYSTEM_MEDIA"
     SYSTEM_YOUTUBE_PLAY = "SYSTEM_YOUTUBE_PLAY"
     SYSTEM_YOUTUBE_SEARCH = "SYSTEM_YOUTUBE_SEARCH"
@@ -789,9 +793,21 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
     if any(n in q for n in ['read note', 'show note', 'check note', 'read notes']):
         return IntentType.SYSTEM_NOTES, {"action": "read"}
 
-    # Reminders
-    if any(r in q for r in ['set a reminder', 'set reminder', 'remind me', 'add reminder']):
-        return IntentType.SYSTEM_REMINDER, {}
+    # Alarms, Alerts, and Reminders
+    if any(k in q for k in ['alarm', 'alert', 'remind', 'reminder', 'timer']):
+        from brain.alert_service import parse_alert_request
+        alert_data = parse_alert_request(query)
+        action = alert_data.get("action")
+        if action == "set":
+            return IntentType.SYSTEM_ALERT_SET, alert_data
+        elif action == "list":
+            return IntentType.SYSTEM_ALERT_LIST, alert_data
+        elif action == "cancel":
+            return IntentType.SYSTEM_ALERT_CANCEL, alert_data
+        elif action == "stop":
+            return IntentType.SYSTEM_ALERT_STOP, alert_data
+        elif any(r in q for r in ['set a reminder', 'set reminder', 'remind me', 'add reminder', 'set alert', 'set alarm', 'give me alert']):
+            return IntentType.SYSTEM_ALERT_SET, alert_data
 
     # Media controls
     if any(m in q for m in ['pause song', 'pause video', 'pause music', 'resume music', 'pause or resume', 'pause media']):
