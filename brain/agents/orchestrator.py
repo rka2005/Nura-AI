@@ -6,10 +6,13 @@ and manages proactive notifications and task lifecycle tracking.
 """
 
 import os
+import time
+import json
 import threading
 from typing import Dict, Any, List, Optional, Tuple
 from brain.agents.event_system import EventBus, Event, EventType, Severity, Finding
 from brain.agents.task_manager import TaskManager, Task, TaskState, PermissionLevel
+from brain.agents.base_agent import AgentStatus
 from brain.agents.project_agent import ProjectAgent
 from brain.agents.screen_agent import ScreenAgent
 from brain.agents.monitor_agent import MonitorAgent
@@ -71,6 +74,12 @@ class AgentOrchestrator:
 
         self._lock = threading.RLock()
         self._proactive_listener_active = True
+        self.status_bridge_file = os.path.join(self.workspace, "status_bridge.json")
+        self._custom_assigned_tasks: Dict[str, str] = {}
+        self._release_timer: Optional[threading.Timer] = None
+
+        # Auto-subscribe to EventBus to sync live status on every event
+        self.event_bus.subscribe(None, self._on_event_bus_update)
 
     # -------------------------------------------------------------
     # 1. Project Testing & Inspection Workflow
@@ -85,6 +94,7 @@ class AgentOrchestrator:
         - Categorizes findings by severity
         """
         target_ws = workspace or self.workspace
+        self.assign_agents_for_intent("AGENT_PROJECT_TEST", query="test project")
         task = self.task_manager.create_task(
             task_type="project_test",
             description=f"Inspect and test project '{os.path.basename(target_ws)}'",
@@ -93,14 +103,17 @@ class AgentOrchestrator:
             metadata={"workspace": target_ws},
         )
 
-        result = self.project_agent.run_safe(task)
-        summary = result.get("summary")
-        if summary:
-            return summary
-        elif result.get("error"):
-            return f"Project testing encountered an error: {result['error']}. Neura remains running."
-        else:
-            return "Project testing completed."
+        try:
+            result = self.project_agent.run_safe(task)
+            summary = result.get("summary")
+            if summary:
+                return summary
+            elif result.get("error"):
+                return f"Project testing encountered an error: {result['error']}. Neura remains running."
+            else:
+                return "Project testing completed."
+        finally:
+            self.release_agents(grace_period=3.5)
 
     # -------------------------------------------------------------
     # 2. Background Task Monitoring Workflow
@@ -265,31 +278,324 @@ class AgentOrchestrator:
 
         return "\n".join(parts)
 
+    def _on_event_bus_update(self, event: Event):
+        """Callback triggered on any EventBus activity to immediately sync status_bridge.json."""
+        try:
+            self.publish_agents_bridge()
+        except Exception:
+            pass
+
+    def publish_agents_bridge(self):
+        """Thread-safe update of live agent states to status_bridge.json."""
+        with self._lock:
+            try:
+                agents_dict = self.get_agents_status_dict()
+                data = {}
+                if os.path.exists(self.status_bridge_file):
+                    try:
+                        with open(self.status_bridge_file, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                    except Exception:
+                        data = {}
+                data["agents"] = agents_dict
+                data["timestamp"] = time.time()
+
+                # Determine active status
+                busy_agents = [aid for aid, info in agents_dict.items() if info.get("status") in ["BUSY", "WORKING", "TESTING"]]
+                if busy_agents:
+                    data["status"] = "BUSY"
+                    first_task = next((info.get("task") for info in agents_dict.values() if info.get("task")), "")
+                    if first_task:
+                        data["active_task"] = first_task
+                else:
+                    if data.get("status") == "BUSY":
+                        data["status"] = "READY"
+                        data["active_task"] = ""
+
+                temp_bridge = f"{self.status_bridge_file}.tmp"
+                with open(temp_bridge, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(temp_bridge, self.status_bridge_file)
+            except Exception:
+                pass
+
     def get_agents_status_dict(self) -> Dict[str, Any]:
         """Returns structured dictionary of all agents' live statuses and current tasks."""
-        agents_map = {
-            "ProjectAgent": (self.project_agent, "Code & Architecture"),
-            "ScreenAgent": (self.screen_agent, "Vision & Screen Control"),
-            "ComputerUseAgent": (self.computer_use_agent, "Full Screen Autonomous Control"),
-            "MonitorAgent": (self.monitor_agent, "System & Process Monitoring"),
-            "SkillAgent": (self.skill_agent, "Domain Skills & Tools"),
-            "MemoryAgent": (self.memory_agent, "Dual-Tier Context & Knowledge"),
-        }
-        res = {}
-        for key, (agent, role) in agents_map.items():
-            curr_task = ""
-            if agent._active_task_ids:
-                t_id = agent._active_task_ids[-1]
-                t_obj = self.task_manager.get_task(t_id)
-                if t_obj:
-                    curr_task = t_obj.description
-            res[key] = {
-                "name": agent.name,
-                "role": role,
-                "status": agent.status.value,
-                "task": curr_task,
+        # Monitor agent status
+        monitor_busy = (
+            self.monitor_agent.status == AgentStatus.BUSY
+            or any(s.get("active") for s in self.monitor_agent.get_all_sessions_status())
+            or "system_monitor" in self._custom_assigned_tasks
+            or "MonitorAgent" in self._custom_assigned_tasks
+        )
+
+        # Project agent status
+        proj_busy = (
+            self.project_agent.status == AgentStatus.BUSY
+            or "project_tester" in self._custom_assigned_tasks
+            or "ProjectAgent" in self._custom_assigned_tasks
+        )
+        proj_task = self._custom_assigned_tasks.get("project_tester") or self._custom_assigned_tasks.get("ProjectAgent")
+        if not proj_task and self.project_agent._active_task_ids:
+            t = self.task_manager.get_task(self.project_agent._active_task_ids[-1])
+            if t:
+                proj_task = t.description
+
+        # Screen agent status
+        screen_busy = (
+            self.screen_agent.status == AgentStatus.BUSY
+            or "screen_vision" in self._custom_assigned_tasks
+            or "ScreenAgent" in self._custom_assigned_tasks
+        )
+        screen_task = self._custom_assigned_tasks.get("screen_vision") or self._custom_assigned_tasks.get("ScreenAgent")
+        if not screen_task and self.screen_agent._active_task_ids:
+            t = self.task_manager.get_task(self.screen_agent._active_task_ids[-1])
+            if t:
+                screen_task = t.description
+
+        # System monitor task
+        sys_task = self._custom_assigned_tasks.get("system_monitor") or self._custom_assigned_tasks.get("MonitorAgent")
+        if not sys_task:
+            active_m = [s for s in self.monitor_agent.get_all_sessions_status() if s.get("active")]
+            if active_m:
+                sys_task = f"Monitoring: {active_m[0].get('name', 'Process')}"
+            elif self.monitor_agent._active_task_ids:
+                t = self.task_manager.get_task(self.monitor_agent._active_task_ids[-1])
+                if t:
+                    sys_task = t.description
+
+        # Skill agent status
+        skill_busy = (
+            self.skill_agent.status == AgentStatus.BUSY
+            or self.computer_use_agent.status == AgentStatus.BUSY
+            or "skill_runner" in self._custom_assigned_tasks
+            or "SkillAgent" in self._custom_assigned_tasks
+        )
+        skill_task = self._custom_assigned_tasks.get("skill_runner") or self._custom_assigned_tasks.get("SkillAgent")
+        if not skill_task:
+            if self.computer_use_agent._active_task_ids:
+                t = self.task_manager.get_task(self.computer_use_agent._active_task_ids[-1])
+                if t:
+                    skill_task = t.description
+            elif self.skill_agent._active_task_ids:
+                t = self.task_manager.get_task(self.skill_agent._active_task_ids[-1])
+                if t:
+                    skill_task = t.description
+
+        # Memory agent status
+        mem_busy = (
+            self.memory_agent.status == AgentStatus.BUSY
+            or "memory_agent" in self._custom_assigned_tasks
+            or "MemoryAgent" in self._custom_assigned_tasks
+        )
+        mem_task = self._custom_assigned_tasks.get("memory_agent") or self._custom_assigned_tasks.get("MemoryAgent")
+        if not mem_task and self.memory_agent._active_task_ids:
+            t = self.task_manager.get_task(self.memory_agent._active_task_ids[-1])
+            if t:
+                mem_task = t.description
+
+        res = {
+            # Lowercase keys for office_view.py
+            "project_tester": {
+                "name": "Project Tester",
+                "role": "Code & Architecture",
+                "status": "BUSY" if proj_busy else "IDLE",
+                "task": proj_task or ("Running project test suite" if proj_busy else "")
+            },
+            "screen_vision": {
+                "name": "Screen Vision",
+                "role": "Vision & Screen Control",
+                "status": "BUSY" if screen_busy else "IDLE",
+                "task": screen_task or ("Inspecting active screen" if screen_busy else "")
+            },
+            "system_monitor": {
+                "name": "System Monitor",
+                "role": "System & Process Monitoring",
+                "status": "BUSY" if monitor_busy else "IDLE",
+                "task": sys_task or ("Monitoring system health" if monitor_busy else "")
+            },
+            "skill_runner": {
+                "name": "Skill Runner",
+                "role": "Domain Skills & Tools",
+                "status": "BUSY" if skill_busy else "IDLE",
+                "task": skill_task or ("Executing tool workflow" if skill_busy else "")
+            },
+            "memory_agent": {
+                "name": "Memory Archivist",
+                "role": "Dual-Tier Context & Knowledge",
+                "status": "BUSY" if mem_busy else "IDLE",
+                "task": mem_task or ("Updating memory archive" if mem_busy else "")
+            },
+            # PascalCase keys for backwards compatibility
+            "ProjectAgent": {
+                "name": "ProjectAgent",
+                "role": "Code & Architecture",
+                "status": "BUSY" if proj_busy else "IDLE",
+                "task": proj_task or ""
+            },
+            "ScreenAgent": {
+                "name": "ScreenAgent",
+                "role": "Vision & Screen Control",
+                "status": "BUSY" if screen_busy else "IDLE",
+                "task": screen_task or ""
+            },
+            "MonitorAgent": {
+                "name": "MonitorAgent",
+                "role": "System & Process Monitoring",
+                "status": "BUSY" if monitor_busy else "IDLE",
+                "task": sys_task or ""
+            },
+            "SkillAgent": {
+                "name": "SkillAgent",
+                "role": "Domain Skills & Tools",
+                "status": "BUSY" if skill_busy else "IDLE",
+                "task": skill_task or ""
+            },
+            "MemoryAgent": {
+                "name": "MemoryAgent",
+                "role": "Dual-Tier Context & Knowledge",
+                "status": "BUSY" if mem_busy else "IDLE",
+                "task": mem_task or ""
+            },
+            "ComputerUseAgent": {
+                "name": "ComputerUseAgent",
+                "role": "Full Screen Autonomous Control",
+                "status": "BUSY" if self.computer_use_agent.status == AgentStatus.BUSY else "IDLE",
+                "task": skill_task or ""
             }
+        }
         return res
+
+    def assign_agents_for_intent(self, intent: str, metadata: Optional[Dict[str, Any]] = None, query: str = ""):
+        """
+        Dynamically assigns the appropriate agent(s) according to incoming intent/task,
+        sets them to BUSY with descriptive task notes, and broadcasts immediately to status_bridge.json.
+        """
+        metadata = metadata or {}
+        q = (query or "").strip().lower()
+        with self._lock:
+            # Cancel any pending release timer
+            if self._release_timer:
+                self._release_timer.cancel()
+                self._release_timer = None
+
+            # Reset custom assignments
+            self._custom_assigned_tasks.clear()
+
+            # 1. Project Testing & Inspection
+            if intent in ["AGENT_PROJECT_TEST", "IntentType.AGENT_PROJECT_TEST"] or any(k in q for k in ["test", "testing", "run test"]):
+                self.project_agent.status = AgentStatus.BUSY
+                self._custom_assigned_tasks["project_tester"] = "Executing project test suite & AST syntax validation"
+                self._custom_assigned_tasks["ProjectAgent"] = "Executing project test suite & AST syntax validation"
+
+            # 2. Multi-Agent Diagnostics
+            elif intent in ["AGENT_PROJECT_DIAGNOSTIC", "IntentType.AGENT_PROJECT_DIAGNOSTIC"] or "diagnos" in q:
+                self.project_agent.status = AgentStatus.BUSY
+                self.screen_agent.status = AgentStatus.BUSY
+                self.monitor_agent.status = AgentStatus.BUSY
+                self._custom_assigned_tasks["project_tester"] = "Investigating codebase architecture & syntax"
+                self._custom_assigned_tasks["screen_vision"] = "Scanning screen and terminal for visible tracebacks"
+                self._custom_assigned_tasks["system_monitor"] = "Inspecting system processes and runtime logs"
+
+            # 3. Vulnerability Scan
+            elif intent in ["AGENT_VULNERABILITY_SCAN", "IntentType.AGENT_VULNERABILITY_SCAN"] or "vulnerabilit" in q:
+                self.project_agent.status = AgentStatus.BUSY
+                self.monitor_agent.status = AgentStatus.BUSY
+                self._custom_assigned_tasks["project_tester"] = "Scanning codebase for SAST security vulnerabilities"
+                self._custom_assigned_tasks["system_monitor"] = "Auditing runtime error logs and exceptions"
+
+            # 4. Error Audit
+            elif intent in ["AGENT_ERROR_AUDIT", "IntentType.AGENT_ERROR_AUDIT"] or "error audit" in q:
+                self.monitor_agent.status = AgentStatus.BUSY
+                self._custom_assigned_tasks["system_monitor"] = "Auditing system error logs & tracebacks"
+
+            # 5. Full Audit Report
+            elif intent in ["AGENT_FULL_AUDIT_REPORT", "IntentType.AGENT_FULL_AUDIT_REPORT"]:
+                self.project_agent.status = AgentStatus.BUSY
+                self.monitor_agent.status = AgentStatus.BUSY
+                self.skill_agent.status = AgentStatus.BUSY
+                self._custom_assigned_tasks["project_tester"] = "Vulnerability security analysis"
+                self._custom_assigned_tasks["system_monitor"] = "Diagnostic error audit"
+                self._custom_assigned_tasks["skill_runner"] = "Generating comprehensive Word audit report"
+
+            # 6. Autonomous Computer Use
+            elif intent in ["AGENT_COMPUTER_USE", "IntentType.AGENT_COMPUTER_USE"] or "computer use" in q:
+                self.computer_use_agent.status = AgentStatus.BUSY
+                self.skill_agent.status = AgentStatus.BUSY
+                self.screen_agent.status = AgentStatus.BUSY
+                goal = metadata.get("goal") or query or "Automating on-screen actions"
+                self._custom_assigned_tasks["skill_runner"] = f"Computer Use: {goal[:35]}"
+                self._custom_assigned_tasks["screen_vision"] = "Perceiving active screen state"
+
+            # 7. Screen Vision / Inspection
+            elif intent in [
+                "AGENT_SCREEN_INSPECT", "SCREEN_DESCRIBE", "SCREEN_CLICK", "SCREEN_OPEN",
+                "SCREEN_PLAY", "SCREEN_SCROLL", "SCREEN_TYPE", "SCREEN_SEARCH",
+                "SCREEN_INTERACT", "VISION_FACE_RECOGNIZE"
+            ] or any(k in q for k in ["screen", "look at screen", "see on screen"]):
+                self.screen_agent.status = AgentStatus.BUSY
+                self._custom_assigned_tasks["screen_vision"] = f"Vision analysis: {query[:35] or 'Inspecting active screen'}"
+
+            # 8. Background Monitoring
+            elif intent in ["AGENT_MONITOR_START", "IntentType.AGENT_MONITOR_START"] or "monitor" in q:
+                self.monitor_agent.status = AgentStatus.BUSY
+                tname = metadata.get("name", "Active Background Task")
+                self._custom_assigned_tasks["system_monitor"] = f"Monitoring: {tname}"
+
+            # 9. Skills, Tools, Desktop Actions, Apps, Files
+            elif intent in [
+                "AGENT_SKILL_LEARN", "AGENT_SKILL_RUN", "SYSTEM_APP_OPEN", "SYSTEM_APP_CLOSE",
+                "SYSTEM_FOLDER_OPEN", "SYSTEM_FILE_OPEN", "FILE_CREATE", "FILE_READ",
+                "FILE_UPDATE", "FILE_DELETE", "FILE_LIST", "DESKTOP_SEARCH_IN_TAB",
+                "DESKTOP_TYPE", "DESKTOP_HOTKEY", "DESKTOP_FIRST_LINK", "DESKTOP_SCREENSHOT"
+            ]:
+                self.skill_agent.status = AgentStatus.BUSY
+                self._custom_assigned_tasks["skill_runner"] = f"Executing tool: {query[:35] or intent}"
+
+            # 10. Memory & Alerts
+            elif intent in [
+                "SYSTEM_ALERT_SET", "SYSTEM_ALERT_LIST", "SYSTEM_ALERT_CANCEL",
+                "SYSTEM_ALERT_STOP", "MEMORY_CLEAR", "MEMORY_INSPECT", "MEMORY_REMEMBER",
+                "MEMORY_CONTEXT_QUERY"
+            ] or any(k in q for k in ["alert", "alarm", "timer", "remember"]):
+                self.memory_agent.status = AgentStatus.BUSY
+                self._custom_assigned_tasks["memory_agent"] = f"Memory Vault: {query[:35] or intent}"
+
+            # 11. Conversational Queries & Default
+            else:
+                self.memory_agent.status = AgentStatus.BUSY
+                self._custom_assigned_tasks["memory_agent"] = "Searching dual-tier context & memories"
+
+            self.publish_agents_bridge()
+
+    def release_agents(self, grace_period: float = 3.0):
+        """
+        Gracefully returns busy agents back to IDLE after grace_period seconds,
+        allowing the 3D office animations to cleanly complete their visible working cycle.
+        """
+        def _do_release():
+            with self._lock:
+                self._custom_assigned_tasks.clear()
+                self.project_agent.status = AgentStatus.IDLE
+                self.screen_agent.status = AgentStatus.IDLE
+                self.skill_agent.status = AgentStatus.IDLE
+                self.computer_use_agent.status = AgentStatus.IDLE
+                # Keep monitor active only if active monitor sessions exist
+                if not any(s.get("active") for s in self.monitor_agent.get_all_sessions_status()):
+                    self.monitor_agent.status = AgentStatus.IDLE
+                self.memory_agent.status = AgentStatus.IDLE
+                self.publish_agents_bridge()
+
+        if grace_period <= 0:
+            _do_release()
+        else:
+            if self._release_timer:
+                self._release_timer.cancel()
+            self._release_timer = threading.Timer(grace_period, _do_release)
+            self._release_timer.daemon = True
+            self._release_timer.start()
 
     # -------------------------------------------------------------
     # 7. Autonomous Full-Screen Computer Use Workflow

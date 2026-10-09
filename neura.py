@@ -801,9 +801,12 @@ def execute_agent_intent(intent, metadata, raw_query: str = ""):
     global SCREEN_ACCESS_ALLOWED, BACKGROUND_WORK_ALLOWED
     orch = get_orchestrator()
     orch.screen_agent.set_permission(SCREEN_ACCESS_ALLOWED)
+    orch.assign_agents_for_intent(intent, metadata, raw_query)
 
     if intent == IntentType.AGENT_PROJECT_TEST:
+        speak("Starting comprehensive project testing and code analysis, Sir.")
         msg = orch.test_project()
+        orch.release_agents(grace_period=3.5)
         return True, msg
 
     elif intent == IntentType.AGENT_PROJECT_DIAGNOSTIC:
@@ -848,11 +851,11 @@ def execute_agent_intent(intent, metadata, raw_query: str = ""):
         set_status_bridge_field("show_agent_office", True)
         if hasattr(orch, "get_agents_status_dict"):
             set_status_bridge_field("agents", orch.get_agents_status_dict())
-        return True, "Displaying 3D Agent Office visualization in Neura Optics, Sir."
+        return True, "Opening the Agent Workspace, Sir. You can see all agents and their operations."
 
     elif intent == IntentType.AGENT_OFFICE_CLOSE:
         set_status_bridge_field("show_agent_office", False)
-        return True, "Closing 3D visualization and restoring camera view in Neura Optics, Sir."
+        return True, "Closing the Agent Workspace and returning to the main HUD, Sir."
 
     elif intent == IntentType.AGENT_COMPUTER_USE:
         goal = metadata.get("goal") or raw_query
@@ -919,10 +922,12 @@ def ask_neura(user_message):
 
     # Check Desktop Automation or File CRUD first (Zero API Call)
     intent, metadata = route_intent(user_message_clean)
+    orch.assign_agents_for_intent(intent, metadata, user_message_clean)
 
     # Check Alert / Alarm Subsystem
     handled, res = execute_alert_intent(intent, metadata, user_message_clean)
     if handled:
+        orch.release_agents(grace_period=3.5)
         speak(res)
         remember_interaction(user_message_clean, res)
         log_activity(f"Alert {intent}: {res[:40]}")
@@ -931,6 +936,7 @@ def ask_neura(user_message):
     # Multi-Agent Orchestration Check
     handled, res = execute_agent_intent(intent, metadata, user_message_clean)
     if handled:
+        orch.release_agents(grace_period=3.5)
         speak(res)
         remember_interaction(user_message_clean, res)
         log_activity(f"Agent {intent}: {res[:40]}")
@@ -2273,8 +2279,11 @@ if __name__ == "__main__":
 
         # Check Alert / Alarm Subsystem
         intent, metadata = route_intent(query)
+        agent_orchestrator.assign_agents_for_intent(intent, metadata, query)
+
         handled, res = execute_alert_intent(intent, metadata, query)
         if handled:
+            agent_orchestrator.release_agents(grace_period=3.5)
             speak(res)
             remember_interaction(query, res)
             agent_orchestrator.memory_agent.record_task_success(query, str(intent), res)
@@ -2284,6 +2293,7 @@ if __name__ == "__main__":
         # Check Multi-Agent Subsystem first
         handled, res = execute_agent_intent(intent, metadata, query)
         if handled:
+            agent_orchestrator.release_agents(grace_period=3.5)
             speak(res)
             remember_interaction(query, res)
             agent_orchestrator.memory_agent.record_task_success(query, str(intent), res)
@@ -2543,7 +2553,7 @@ if __name__ == "__main__":
             if not close_app:
                 speak("Please specify which application you would like to close.")
 
-            elif any(v in close_app.lower() for v in ['visualisation', 'visualization', 'office', '3d']):
+            elif any(v in close_app.lower() for v in ['visualisation', 'visualization', 'office', '3d', 'workspace', 'facility', 'popup']):
                 handled, res = execute_agent_intent(IntentType.AGENT_OFFICE_CLOSE, {})
                 speak(res)
 

@@ -94,8 +94,14 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
     if not q:
         return IntentType.CONVERSATION, {}
 
-    # Exit
-    if any(phrase in q for phrase in ['good bye', 'goodbye', 'exit', 'bye', 'quit', 'good night']):
+    # Exit (only full exit phrases, excluding specific workspace/app/window exits)
+    is_assistant_exit = (
+        q in ['exit', 'quit', 'bye', 'goodbye', 'good bye', 'good night']
+        or re.search(r"^(?:good\s*bye|bye|good\s*night)\b", q)
+        or (re.search(r"\b(?:exit|quit)\s+(?:neura|assistant|system|program|application)\b", q))
+    ) and not any(k in q for k in ['workspace', 'office', 'task', 'monitor', 'app', 'browser', 'tab', 'window', 'popup'])
+
+    if is_assistant_exit:
         return IntentType.EXIT, {}
 
     # Emotional State / Mood Support (when not asking for a specific command like joke or music directly)
@@ -137,42 +143,61 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
             sub_meta["permission_granted"] = True
             return sub_intent, sub_meta
 
-    # 3D Agent Visualization / Virtual Office Display & Close (Switches Neura Optics Camera View)
-    if any(p in q for p in [
-        'show 3d visualization', 'show 3d visual', 'open 3d visualization', 'open 3d visual',
-        'show 3d visualisation', 'open 3d visualisation', 'show the 3d visualisation',
-        'show 3d office', 'open 3d office', 'show the 3d office', 'open the 3d office',
-        'show agent visualization', 'open agent visualization', 'show agent office', 'open agent office',
-        'show agent visualisation', 'open agent visualisation',
-        'show the 3d visualization', 'open the 3d visualization',
-        'show 3d visualization of the agent works', 'show 3d visualization of the agent work',
-        'show 3d visualisation of the agent works', 'show 3d visualisation of the agent work',
-        'show 3d visualization of agent works', 'show 3d visualization of agent',
-        'show 3d visualisation of agent works', 'show 3d visualisation of agent',
-        'show agent visualizer', 'open agent visualizer',
-        '3d visualization of the agent', 'show 3d agent', 'open 3d agent',
-        'open agent 3d office', 'show agent 3d office', 'show agent works',
-        'visualisation of agents', 'visualization of agents',
-        'show me the visualisation', 'show me the visualization'
-    ]) or re.search(r"\b(?:show|open|display)\s+(?:me\s+)?(?:the\s+)?(?:3d\s+)?(?:agent\s+)?(?:visuali[sz]ation|visual|office|visualizer)(?:\s+of\s+(?:the\s+)?(?:agent\s+works?|agents?))?\b", q):
-        return IntentType.AGENT_OFFICE_SHOW, {}
-
-    if any(p in q for p in [
-        'close visualization', 'close the visualization', 'hide visualization',
+    # -------------------------------------------------------------------------
+    # Agent Workspace / 3D Virtual Office - Open & Close
+    # Handles full workspace popup and Neura Optics 3D facility
+    # Note: Check CLOSE first so commands like "close agent workspace" are not
+    # intercepted by "agent workspace" open patterns.
+    # -------------------------------------------------------------------------
+    workspace_close_patterns = [
+        r"\b(?:close|hide|exit|dismiss|shut|leave)\s+(?:the\s+)?(?:3d\s+)?(?:agent\s+)?(?:workspace|office|facility|lab|popup|visuali[sz]ation|visual|visualizer)\b",
+        r"\b(?:back|return|go\s+back)\s+to\s+(?:the\s+)?(?:main\s+(?:screen|hud|view|display)|hud|camera|cam\s+view)\b",
+        r"\b(?:close|dismiss|exit)\s+(?:the\s+)?popup\b",
+        r"\bclose\s+(?:that\s+one|that|it|this)\b",
+    ]
+    if any(re.search(pat, q) for pat in workspace_close_patterns) or any(p in q for p in [
+        'close agent workspace', 'close the agent workspace', 'close workspace', 'close the workspace',
+        'hide agent workspace', 'hide workspace', 'exit agent workspace', 'exit workspace',
+        'leave agent workspace', 'leave workspace', 'dismiss agent workspace', 'dismiss workspace',
+        'close agent office', 'close the agent office', 'close office', 'close the office',
+        'hide agent office', 'hide office', 'exit office', 'exit agent office', 'close 3d office',
+        'hide 3d office', 'close the 3d office', 'hide the 3d office',
+        'close visualization', 'close the visualization', 'hide visualization', 'hide the visualization',
         'close visualisation', 'close the visualisation', 'hide visualisation',
         'close 3d visualization', 'close 3d visual', 'hide 3d visualization', 'hide 3d visual',
         'close 3d visualisation', 'hide 3d visualisation',
-        'close 3d office', 'hide 3d office', 'close the 3d office', 'hide the 3d office',
-        'close agent visualization', 'hide agent visualization', 'close agent office', 'hide agent office',
-        'close agent visualisation', 'hide agent visualisation',
-        'close the 3d visualization', 'hide the 3d visualization',
-        'close the 3d visualisation', 'hide the 3d visualisation',
         'close 3d visualization of the agent works', 'close 3d visualizer', 'close agent visualizer',
-        'close that one', 'close that', 'show camera', 'switch to camera',
-        'close the 3d visual', 'close 3d view', 'close the agent office'
-    ]) or re.search(r"\b(?:close|hide|dismiss|shut|exit)\s+(?:the\s+)?(?:3d\s+)?(?:agent\s+)?(?:visuali[sz]ation|visual|office|visualizer)\b", q) \
-       or re.search(r"\bclose\s+(?:that\s+one|that|it|visuali[sz]ation|the\s+visuali[sz]ation)\b", q):
+        'back to hud', 'return to hud', 'go back to hud',
+        'back to main screen', 'return to main screen', 'go back to main screen',
+        'back to main view', 'return to main view',
+        'close popup', 'close the popup', 'exit popup', 'dismiss popup',
+        'close that one', 'close that', 'show camera', 'switch to camera', 'back to camera'
+    ]):
         return IntentType.AGENT_OFFICE_CLOSE, {}
+
+    workspace_open_patterns = [
+        r"\b(?:open|show|display|launch|view|switch\s+to|take\s+me\s+to)\s+(?:me\s+)?(?:the\s+)?(?:3d\s+)?(?:agent\s+)?(?:workspace|office|facility|lab|visuali[sz]ation|visual|visualizer)\b",
+        r"\b(?:show|view)\s+(?:me\s+)?(?:what\s+the\s+agents\s+are\s+doing|agents\s+at\s+work|the\s+agent\s+works?)\b",
+        r"\b(?:agent|3d)\s+workspace\b",
+        r"\b(?:agent|3d)\s+office\b",
+    ]
+    if (any(re.search(pat, q) for pat in workspace_open_patterns) or any(p in q for p in [
+        'open agent workspace', 'show agent workspace', 'open workspace', 'show workspace',
+        'open the agent workspace', 'show the agent workspace', 'open the workspace', 'show the workspace',
+        'open 3d workspace', 'show 3d workspace', 'display workspace', 'launch workspace',
+        'open agent office', 'show agent office', 'open office', 'show office',
+        'open the office', 'show the office', 'open 3d office', 'show 3d office',
+        'open the 3d office', 'show the 3d office', 'open agent facility', 'show agent facility',
+        'open agent lab', 'show agent lab', 'show agent visualization', 'open agent visualization',
+        'show agent visualisation', 'open agent visualisation',
+        'show 3d visualization', 'open 3d visualization', 'show the 3d visualization', 'open the 3d visualization',
+        'show 3d visualisation', 'open 3d visualisation', 'show the 3d visualisation', 'open the 3d visualisation',
+        'show 3d visualization of the agent works', 'show 3d visualization of agent',
+        'show 3d visualisation of the agent works', 'show agent visualizer', 'open agent visualizer',
+        '3d visualization of the agent', 'show 3d agent', 'open 3d agent',
+        'show me what the agents are doing', 'show agents at work', 'agent workspace'
+    ])) and not any(neg in q for neg in ['close', 'hide', 'exit', 'dismiss', 'shut', 'leave', 'back', 'return']):
+        return IntentType.AGENT_OFFICE_SHOW, {}
 
     # Multi-Agent Subsystem: Task Status / "What are you doing?"
     if any(phrase in q for phrase in [
@@ -239,11 +264,21 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
         return IntentType.AGENT_VULNERABILITY_SCAN, {}
 
     # Multi-Agent Subsystem: Comprehensive Project Testing Workflow
-    # "Neura, test my project", "test this project", "inspect my project", "run project tests"
-    if re.search(r"\b(?:test|inspect|audit|check)\s+(?:my\s+|this\s+|the\s+)?project\b", q) or any(p in q for p in [
-        'test my project', 'test this project', 'test the project', 'test project',
-        'run project tests', 'run tests on my project', 'inspect project', 'audit project'
-    ]):
+    # "Neura, test my project", "test this project", "inspect my project", "run project tests", "test", "testing", "run tests"
+    is_project_test = (
+        re.search(r"\b(?:test|inspect|audit|check)\s+(?:my\s+|this\s+|the\s+)?(?:project|codebase|code|application|app|system|repo|repository)\b", q)
+        or re.search(r"\b(?:run|start|execute|perform|do|begin)\s+(?:the\s+|all\s+|project\s+|unit\s+|code\s+)?tests?\b", q)
+        or re.search(r"\b(?:start|begin|do|perform)\s+testing\b", q)
+        or q in ['test', 'testing', 'run tests', 'run test', 'start testing', 'test it', 'test this', 'test now', 'test all', 'test everything', 'run all tests']
+        or any(p in q for p in [
+            'test my project', 'test this project', 'test the project', 'test project',
+            'run project tests', 'run tests on my project', 'inspect project', 'audit project',
+            'test the codebase', 'test codebase', 'test code', 'run unit tests', 'run the tests',
+            'test the app', 'test application', 'test system', 'test neura'
+        ])
+    ) and not any(k in q for k in ['internet', 'speed', 'voice', 'microphone', 'mic'])
+
+    if is_project_test:
         return IntentType.AGENT_PROJECT_TEST, {}
 
     # Multi-Agent Subsystem: Multi-Agent Failure Investigation & Diagnostic
