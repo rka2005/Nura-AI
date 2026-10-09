@@ -13,12 +13,14 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 [![Architecture: Multi-Agent](https://img.shields.io/badge/Architecture-Multi--Agent_Orchestrator-00e5ff?style=flat-square)](brain/agents/)
 [![3D Office](https://img.shields.io/badge/Visualizer-3D_Agent_Office-FF6B6B?style=flat-square)](frontend.py)
+[![Voice TTS](https://img.shields.io/badge/Voice_TTS-Sarvam_AI_Bulbul_v4-FF9933?style=flat-square)](neura.py)
+[![Alert Engine](https://img.shields.io/badge/Alerts-Smart_Offset_Engine-00E5FF?style=flat-square)](brain/alert_service.py)
 
 <p align="center">
-  <strong>An intelligent personal AI companion, multi-agent cognitive orchestrator, and a cybernetic desktop HUD with deep biometrics (YuNet + SFace), 3D Virtual Agent Office in Neura Optics, Screen Vision (OCR & semantic layout intelligence), 3D audio reactivity, computer vision, long-term memory, and OS automation.</strong>
+  <strong>An intelligent personal AI companion, multi-agent cognitive orchestrator, and a cybernetic desktop HUD with deep biometrics (YuNet + SFace), 3D Virtual Agent Office in Neura Optics, Screen Vision (OCR & semantic layout intelligence), Sarvam AI neural voice, intelligent alert offset engine, 3D audio reactivity, computer vision, long-term memory, and OS automation.</strong>
 </p>
 
-[Key Features](#-key-features) • [Biometric Vision Pipeline](#-biometric-vision--facial-recognition-pipeline) • [Screen Vision Subsystem](#-screen-vision--desktop-automation-subsystem) • [Architecture](#-architecture) • [UI & HUD Showcase](#-ui--hud-showcase) • [Tech Stack](#-tech-stack) • [Directory Structure](#-project-directory-structure) • [Installation & Setup](#-installation--setup) • [Vision Enrollment Guide](#-face-enrollment--vision-tools) • [Command Cheatsheet](#-command-cheatsheet) • [Contact](#-developer--contact)
+[Key Features](#-key-features) • [Alert & Alarm System](#-intelligent-alert-alarm--loophole-offset-subsystem) • [Biometric Vision Pipeline](#-biometric-vision--facial-recognition-pipeline) • [Screen Vision Subsystem](#-screen-vision--desktop-automation-subsystem) • [Architecture](#-architecture) • [UI & HUD Showcase](#-ui--hud-showcase) • [Tech Stack](#-tech-stack) • [Directory Structure](#-project-directory-structure) • [Installation & Setup](#-installation--setup) • [Vision Enrollment Guide](#-face-enrollment--vision-tools) • [Command Cheatsheet](#-command-cheatsheet) • [Contact](#-developer--contact)
 
 ---
 
@@ -48,9 +50,12 @@ Whether commanded by **natural voice speech**, **tactical keyboard inputs**, or 
 - **Anonymous Fallback Support**: If an unknown person replies with *"no"*, *"nope"*, *"nah"*, or any reluctance phrase, Neura automatically registers them sequentially as **`Anonymous 1`**, **`Anonymous 2`**, etc., with persistent photos and embeddings for future recognition.
 
 ### 🎙️ 2. Multimodal Interaction & Bi-Directional Bridge
-- **Voice-Driven Interaction**: Hands-free voice commands powered by `SpeechRecognition` and native Windows SAPI / `pyttsx3` text-to-speech with natural pacing and asynchronous non-blocking speech queues.
+- **Sarvam AI Neural TTS Engine (`bulbul:v4-flash`)**: Studio-grade, natural neural speech generation powered by Sarvam AI's low-latency WebSocket streaming API. Employs the `ishita_enhi_companion` speaker profile (`en-IN` English, 24 kHz studio audio) for remarkably realistic, conversational voice inflection.
+- **Fail-Safe Dual Voice Architecture**: Async WebSocket audio streaming with automatic fail-safe fallback to Windows SAPI5 (`pyttsx3`) local speech synthesis if offline or if API keys are missing.
+- **Voice-Driven Interaction**: Hands-free voice recognition powered by `SpeechRecognition` with non-blocking speech queues and seamless frontend chat bridge integration.
 - **Interactive In-HUD Text Input**: Blinking cursor input bar with clipboard support (`Ctrl+V`), command history, and instant dispatch for silent operation.
 - **Multi-Process IPC Bridge**: Low-latency IPC bridges (`chat_bridge.json`, `input_bridge.json`, `status_bridge.json`, `auto_learn_bridge.json`) with safe atomic updates and file-lock collision guards.
+
 
 ### 🌐 3. Quantum Cybernetic HUD (Pygame 2.6 Engine)
 - **3D Audio-Reactive Golden Sphere**: 1,800+ mathematically projected surface particles reacting in real-time to microphone acoustic amplitude.
@@ -105,6 +110,24 @@ Whether commanded by **natural voice speech**, **tactical keyboard inputs**, or 
   - Voice command *"show the 3d visualization of the agent works"* (or *"open 3d office"*, *"show agent visualization"*) instantly switches Neura Optics from camera feed to the 3D office.
   - Voice command *"close visualization"* (or *"close the visualization"*, *"show camera"*, *"switch to camera"*) smoothly closes the office and restores the live camera feed.
   - Interactive buttons: Direct header chip `[► 3D AGENTS]` / `[► CAM VIEW]`, top bar `[3D AGTS]` button, plus in-viewport `[DEMO]`, `[RESET]`, and agent click-to-inspect telemetry.
+
+### ⏰ 9. Intelligent Alert, Alarm & Loophole Offset Subsystem
+- **Natural Language Relative Offset Engine (Loophole Resolution)**: Automatically interprets and calculates conversational relative time offsets:
+  - *"I have a meeting after 5 minutes, so alert me before 2 minutes of that"* $\rightarrow$ delay: $5 - 2 = 3$ minutes.
+  - *"I have a meeting after 5 minutes, alert me after 3 minutes"* $\rightarrow$ delay: $3$ minutes.
+  - *"I have a meeting in 10 minutes, alert me 3 minutes before that"* $\rightarrow$ delay: $10 - 3 = 7$ minutes.
+  - Absolute clock time offsets: *"I have a meeting at 4:30 pm, alert me 15 minutes before"* $\rightarrow$ scheduled for 4:15 PM.
+- **Context-Aware Spoken Announcements on Trigger**: Neura articulates the exact context of why the alert was scheduled and delivers a polite, humanized spoken announcement when it fires:
+  - **Imminent Events**: *"Sir! You have an important meeting right now as you have told me. Please get ready for the meeting."*
+  - **Offset Warnings**: *"Sir! As you told me, you have a meeting in 2 minutes. Please get ready for the meeting."*
+  - **Action Reminders**: *"Sir! It is time to take your medicine right now as you have told me."*
+  - **Direct Timers**: *"Sir! Your 5-minute alarm has arrived as you have told me."*
+- **Multi-Sensor Alert Delivery**:
+  - Pulsing multi-tone digital alarm chime (via Windows `winsound.Beep` sequence).
+  - Neural voice announcement via Sarvam AI / Windows TTS.
+  - Windows desktop toast notification.
+  - Real-time logging into the frontend chat feed (`chat_bridge.json`) and status bar.
+- **Persistent Background Daemon (`brain/alert_service.py`)**: Dedicated 0.5s daemon worker thread managing persistent alerts in `memory/alerts.json`, supporting active listing (*"What alarms are set?"*), targeted or full cancellation (*"Cancel the meeting alert"*, *"Cancel all alarms"*), and immediate silence commands (*"Stop alarm"*, *"Silence alarm"*).
 
 ---
 
@@ -282,20 +305,23 @@ flowchart TB
     end
 
     subgraph Core_Engine ["🧠 Backend Engine (neura.py)"]
-        VoiceIO["Speech Recognition & Windows SAPI TTS"]
+        VoiceIO["Speech Recognition & Dual TTS<br/>(Sarvam AI ⇄ Windows SAPI5)"]
         Router["Intent Router & Dispatcher<br/>(brain/intent_router.py)"]
+        AlertSvc["Alert & Alarm Service<br/>(brain/alert_service.py)"]
         Personality["Fixed Personality System<br/>(brain/personality.py)"]
         DesktopCtrl["Desktop Automation Controller<br/>(brain/desktop_controller.py)"]
         ScreenVision["Screen Vision Engine<br/>(brain/screen_vision.py)"]
         FileMgr["File Manager CRUD<br/>(brain/file_manager.py)"]
         MemoryMgr["3-Tier Memory Manager<br/>(memory/memory_manager.py)"]
+        AlertsDB[("memory/alerts.json<br/>Persistent Alert Storage")]
     end
 
     subgraph External_APIs ["☁️ Cloud & System Services"]
+        Sarvam["Sarvam AI Bulbul v4 TTS WebSocket"]
         Gemini["Google Gemini 2.0 Flash API"]
         Groq["Groq High-Speed LLM"]
         WinOCR["Windows Media OCR / PyTesseract"]
-        WinOS["Windows API / PyAutoGUI / Pycaw"]
+        WinOS["Windows API / PyAutoGUI / Pycaw / Winsound"]
     end
 
     CamView <--> |Mirrored Frames| BiometricCore
@@ -309,6 +335,10 @@ flowchart TB
     Router --> DesktopCtrl & ScreenVision & FileMgr
     Router --> MemoryMgr
     Router --> Orchestrator
+    Router --> AlertSvc
+    AlertSvc <--> AlertsDB
+    AlertSvc --> WinOS
+    VoiceIO --> Sarvam
     Orchestrator --> ProjectAgent & ScreenAgent & MonitorAgent & SkillAgent
     Orchestrator <--> TaskManager
     DesktopCtrl <--> ScreenVision
@@ -342,10 +372,11 @@ flowchart TB
 | **Screen Vision & Desktop OCR** | Windows Media OCR (`winocr`), PyTesseract, Pillow (`PIL`), `ctypes` (Per-Monitor DPI v2) |
 | **Graphical Interface** | Pygame 2.6, PyAudio |
 | **LLM & AI Reasoning** | Google Gemini 2.0 Flash (`google-generativeai`), Groq API |
-| **Speech & Audio** | `SpeechRecognition`, Windows SAPI5 (`win32com.client`), `pyttsx3`, PyAudio |
+| **Speech & Audio** | Sarvam AI Neural TTS (`bulbul:v4-flash`, `ishita_enhi_companion`), `websockets`, Windows SAPI5 (`win32com.client`), `pyttsx3`, `SpeechRecognition`, PyAudio |
+| **Alerts & Scheduling** | Autonomous Alert & Alarm Engine (`brain/alert_service.py`), Windows `winsound.Beep`, Native Windows Toast Notifications, Persistent 0.5s Daemon |
 | **Hardware Monitoring** | `psutil`, NVIDIA SMI (`nvidia-smi`) |
 | **OS Automation & Controls** | `pyautogui`, `pygetwindow`, `pycaw`, `screen_brightness_control`, `keyboard`, `webbrowser` |
-| **Data & Memory** | JSON Schema Storage, 3-Tier Hierarchical Memory Model, SFace Vector Database |
+| **Data & Memory** | JSON Schema Storage, 3-Tier Hierarchical Memory Model, SFace Vector Database, Persistent Alert Storage (`alerts.json`) |
 
 ---
 
@@ -354,16 +385,17 @@ flowchart TB
 ```text
 Neura_test_ai/
 │
-├── neura.py                     # Core AI assistant engine, speech recognition, intent router, execution loop
+├── neura.py                     # Core AI assistant engine, speech recognition, Sarvam AI TTS, intent router, execution loop
 ├── frontend.py                  # Quantum Sci-Fi HUD, 3D sphere, biometric camera viewfinder, telemetry (Pygame)
 ├── setup_owner.py               # Primary owner enrollment CLI tool (camera or image folder)
 ├── setup_face.py                # Multi-person biometric enrollment, batch folder tool & CLI live learning
+├── test_alert_system.py         # 16-test verification suite for relative offset alarms, loops, and contextual speech
 ├── test_screen_vision.py        # 14-test verification suite for Screen Vision, DPI scaling & cursor actions
 ├── test_semantic_screen_vision.py # Diagnostic layout tests for Google Search & YouTube UI landmarks
 ├── test_face_recognition.py     # Diagnostic verification and test suite for the biometric pipeline
 ├── test_agents_system.py        # Multi-agent verification suite (testing, monitoring, skills, errors)
 ├── requirements.txt             # Project package dependencies
-├── .env                         # Private API keys (Gemini, Groq)
+├── .env                         # Private API keys (Gemini, Groq, Sarvam, Weather)
 │
 ├── chat_bridge.json             # IPC bridge: chat message stream
 ├── input_bridge.json            # IPC bridge: queued UI commands
@@ -382,6 +414,7 @@ Neura_test_ai/
 ├── images/                      # Enrolled face snapshots (e.g., Rohit Kumar Adak.jpg, Anonymous 1.jpg)
 │
 ├── brain/                       # Cognitive intelligence modules
+│   ├── alert_service.py         # Intelligent Alert & Alarm engine (relative offsets, math loophole resolution, audio chimes)
 │   ├── conversation.py          # LLM prompt orchestrator combining identity, memory, and chat history
 │   ├── intent_router.py         # Intent classification engine mapping queries to desktop actions
 │   ├── personality.py           # Neura's fixed personality guidelines, tone, and behavioral directives
@@ -400,6 +433,7 @@ Neura_test_ai/
 │       └── events.py            # EventBus: non-blocking pub/sub messaging & notification queues
 │
 ├── memory/                      # 3-Tier persistent memory subsystem
+│   ├── alerts.json              # Persistent active and triggered alert/alarm storage
 │   ├── memory_manager.py        # MemoryManager class handling facts, preferences, and session context
 │   ├── user_memory.json         # Long-term user profile, preferences, and episodic activity log
 │   └── conversation_memory.json # Recent chat turns and summarized conversation memory
@@ -431,7 +465,7 @@ venv\Scripts\activate
 ### 4. Install Dependencies
 ```bash
 pip install -r requirements.txt
-pip install opencv-python numpy groq screen-brightness-control pycaw keyboard pyautogui pyjokes psutil pyaudio
+pip install opencv-python numpy groq screen-brightness-control pycaw keyboard pyautogui pyjokes psutil pyaudio websockets pygame
 ```
 
 > **Note on PyAudio**: If you encounter issues installing `pyaudio` via pip on Windows, install it using `pip install pipwin && pipwin install pyaudio` or download the precompiled wheel from [Unofficial Windows Binaries](https://www.lfd.uci.edu/~gohlke/pythonlibs/#pyaudio).
@@ -439,11 +473,25 @@ pip install opencv-python numpy groq screen-brightness-control pycaw keyboard py
 ### 5. Configure API Keys
 Create a `.env` file in the root directory:
 ```env
+# AI Reasoning LLM Engines
 GEMINI_API_KEY=your_google_gemini_api_key_here
 GROQ_API_KEY=your_groq_api_key_here
+
+# Real-Time Weather Telemetry
+WEATHER_API=your_openweathermap_api_key_here
+
+# Sarvam AI High-Definition Neural Speech (TTS)
+SARVAM_API_KEY=your_sarvam_api_key_here
+NEURA_TTS_PROVIDER=sarvam
+NEURA_TTS_MODEL=bulbul:v4-flash
+NEURA_TTS_LANGUAGE=en-IN
+NEURA_TTS_SPEAKER=ishita_enhi_companion
 ```
 - Obtain a Gemini key: [Google AI Studio](https://aistudio.google.com/)
 - Obtain a Groq key: [Groq Console](https://console.groq.com/)
+- Obtain a Sarvam AI key: [Sarvam AI Dashboard](https://dashboard.sarvam.ai/)
+- Obtain a Weather key: [OpenWeatherMap API](https://openweathermap.org/api)
+
 
 ---
 
@@ -506,6 +554,13 @@ Run the comprehensive test suite covering the `AgentOrchestrator`, `TaskManager`
 python test_agents_system.py
 ```
 
+### 6. Testing the Intelligent Alert & Alarm Subsystem
+Run the 16-test comprehensive suite covering relative offset math (loophole calculations), clock times, active listing, cancellation, and contextual trigger speech:
+```bash
+python test_alert_system.py
+```
+
+
 ---
 
 ## 🎮 Running Neura AI
@@ -556,6 +611,14 @@ Neura accepts commands via **Voice Speech**, **Typing into the HUD input box**, 
 | **Cognitive Memory** | *"What do you know about me"*, *"My favorite city is Tokyo"* | Reads / writes to 3-tier memory engine |
 | **File System CRUD** | *"Create file notes.txt with hello"*, *"Read file notes.txt"*, *"List files"* | Deterministic file operations via `FileManager` without API calls |
 | **Productivity & Notes** | *"Take a note"*, *"Read my notes"*, *"Set a reminder"* | Creates timestamped local notes & timers |
+| **Alert (Relative Offset)** | *"I have a meeting after 5 minutes, so alert me before 2 minutes of that"* | Calculates offset ($5-2=3$m) and schedules alert for 3m from now |
+| **Alert (Contextual Meeting)** | *"Neura please alert me after 5 minutes that I have an important meeting"* | Schedules 5m alert; speaks contextual meeting reminder on trigger |
+| **Alert (Action Reminder)** | *"Set an alert after 10 minutes to take medicine"* | Sets 10m timer; speaks *"Sir! It is time to take your medicine..."* |
+| **Alarm (Direct Timer)** | *"Set an alarm for 5 minutes"*, *"Alert me in 30 seconds"* | Schedules direct countdown timer with audio chime & toast |
+| **Alarm (Clock Time)** | *"Set an alarm for 7:30 am"*, *"Alert me at 4:30 pm"* | Computes target clock time and schedules morning/afternoon alarm |
+| **Active Alerts Query** | *"What alarms are set?"*, *"Show active alerts"*, *"Check my alarms"* | Lists pending alerts, target times, and remaining time |
+| **Cancel Alerts** | *"Cancel the meeting alert"*, *"Cancel all alarms"* | Cancels specified alert by name or removes all active alerts |
+| **Silence / Stop Alarm** | *"Stop alarm"*, *"Silence alarm"*, *"Turn off alarm"* | Immediately silences the continuous audio alarm chime |
 | **System Diagnostics** | *"Open task manager"*, *"Take a screenshot"* | Launches task manager or captures display |
 | **Session Control** | *"Clear conversation"*, *"Clear memory"*, *"Goodbye"* | Resets memory buffers or cleanly shuts down |
 
