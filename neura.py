@@ -1026,19 +1026,26 @@ def execute_agent_intent(intent, metadata, raw_query: str = ""):
             target_file = target_name
             target_desc = f"file '{target_name}'"
 
-        # 3. Named Project Target Resolution (e.g. "whatsapp bot project")
-        elif target_type == "named_project" and target_name:
+        # 3. Named Project Target Resolution (e.g. "whatsapp bot project" or "Mail_automation")
+        elif (target_type == "named_project" or target_name) and target_name not in ["current_file", "this file", "current_project"]:
             norm_name = re.sub(r'[^a-zA-Z0-9]', '', target_name.lower())
             found_folder = None
-            try:
-                for item in os.listdir(orch.workspace):
-                    full_item = os.path.join(orch.workspace, item)
-                    if os.path.isdir(full_item):
-                        if norm_name in re.sub(r'[^a-zA-Z0-9]', '', item.lower()):
-                            found_folder = full_item
-                            break
-            except Exception:
-                pass
+            parent_dir = os.path.dirname(orch.workspace)
+            for search_base in [orch.workspace, parent_dir]:
+                if not search_base or not os.path.exists(search_base):
+                    continue
+                try:
+                    for item in os.listdir(search_base):
+                        full_item = os.path.join(search_base, item)
+                        if os.path.isdir(full_item):
+                            clean_item = re.sub(r'[^a-zA-Z0-9]', '', item.lower())
+                            if norm_name == clean_item or (norm_name in clean_item and len(norm_name) >= 3) or (clean_item in norm_name and len(clean_item) >= 3):
+                                found_folder = full_item
+                                break
+                    if found_folder:
+                        break
+                except Exception:
+                    pass
 
             if found_folder:
                 target_ws = found_folder
@@ -1050,40 +1057,71 @@ def execute_agent_intent(intent, metadata, raw_query: str = ""):
             target_desc = f"project '{os.path.basename(target_ws)}'"
 
         # 4. Terminal Permission Gating (Voice / Text confirmation)
+        from brain.hardware_manager import select_compute_device
+        gpu_info = select_compute_device(prefer_dedicated=True)
+        gpu_speech = f"using dedicated GPU {gpu_info.get('name')}" if gpu_info.get("is_dedicated") else f"using system GPU {gpu_info.get('name')}"
+
         if perm_granted is True:
             terminal_allowed = True
-            speak(f"Terminal permission recognized. Accessing terminal to test and debug {target_desc}, Sir.")
+            speak(f"Terminal permission recognized. Accessing live terminal {gpu_speech} to test and debug {target_desc}, Sir.")
         elif perm_granted is False:
             terminal_allowed = False
             speak(f"Terminal access disabled. Performing general static analysis on {target_desc}, Sir.")
         else:
             terminal_allowed = prompt_user_for_terminal_permission(target_desc)
+            if terminal_allowed:
+                speak(f"Accessing live terminal {gpu_speech} to test and debug {target_desc}, Sir.")
 
-        # 5. Execute Project / File Testing via Orchestrator
-        if target_file:
+        # 5. Execute Project / File Testing
+        if not terminal_allowed:
+            # Static analysis is instant and safe to run directly
             msg = orch.test_project(
                 workspace=target_ws,
                 target_file=target_file,
-                terminal_allowed=terminal_allowed,
+                terminal_allowed=False,
                 target_name=target_desc,
-                from_screen=from_screen
+                from_screen=from_screen,
+                prefer_dedicated_gpu=True
             )
+            if hasattr(orch, "last_test_result") and orch.last_test_result:
+                full_report = orch.last_test_result.get("full_report")
+                if full_report:
+                    send_to_frontend("neura", full_report)
+            orch.release_agents(grace_period=2.5)
+            return True, msg
         else:
-            msg = orch.test_project(
+            # Dynamic Terminal Test: Spawn Background Worker Agent
+            def on_test_done(result_dict):
+                try:
+                    full_report = result_dict.get("full_report")
+                    if full_report:
+                        send_to_frontend("neura", full_report)
+                    summary = result_dict.get("summary") or "Project testing completed."
+                    send_to_frontend("neura", f"**[Testing Agent Finished]** {summary}")
+                    try:
+                        if not globals().get("ASSISTANT_IS_SPEAKING", False):
+                            speak(f"Testing on {target_desc} has finished in the background, Sir.")
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+
+            session_res = orch.start_background_test(
                 workspace=target_ws,
-                terminal_allowed=terminal_allowed,
+                target_file=target_file,
+                terminal_allowed=True,
                 target_name=target_desc,
-                from_screen=from_screen
+                from_screen=from_screen,
+                prefer_dedicated_gpu=True,
+                on_complete_callback=on_test_done
             )
 
-        # 6. Push Full Markdown Report to Frontend Chat
-        if hasattr(orch, "last_test_result") and orch.last_test_result:
-            full_report = orch.last_test_result.get("full_report")
-            if full_report:
-                send_to_frontend("neura", full_report)
-
-        orch.release_agents(grace_period=3.5)
-        return True, msg
+            ack_msg = (
+                f"Project testing completed: Testing Agent has launched in the background to test {target_desc} {gpu_speech}. "
+                f"Live terminal streaming is active. Neura remains fully listening and responsive to your requests, Sir."
+            )
+            send_to_frontend("neura", ack_msg)
+            return True, ack_msg
 
     elif intent == IntentType.AGENT_PROJECT_DIAGNOSTIC:
         msg = orch.investigate_project_failure()
@@ -1099,6 +1137,13 @@ def execute_agent_intent(intent, metadata, raw_query: str = ""):
         return True, msg
 
     elif intent == IntentType.AGENT_STATUS:
+        bg_test = orch.get_background_test_status()
+        if bg_test and bg_test.get("active"):
+            target = bg_test.get("target", "project")
+            cmd = bg_test.get("live_terminal", {}).get("command") or "test runner"
+            elapsed = int(time.time() - bg_test.get("started_at", time.time()))
+            msg = f"The Testing Agent is currently executing live tests on {target} in the background ({elapsed}s elapsed). Active command: {cmd}. Live output is streaming in the terminal."
+            return True, msg
         msg = orch.get_status_overview()
         return True, msg
 
@@ -1132,6 +1177,14 @@ def execute_agent_intent(intent, metadata, raw_query: str = ""):
     elif intent == IntentType.AGENT_OFFICE_CLOSE:
         set_status_bridge_field("show_agent_office", False)
         return True, "Closing the Agent Workspace and returning to the main HUD, Sir."
+
+    elif intent == IntentType.AGENT_TERMINAL_VIEW_SHOW:
+        set_status_bridge_field("show_live_terminal", True)
+        return True, "Opening the live terminal testing view in Neura Optics, Sir."
+
+    elif intent == IntentType.AGENT_TERMINAL_VIEW_CLOSE:
+        set_status_bridge_field("show_live_terminal", False)
+        return True, "Closing the live terminal view and returning to camera scanner, Sir."
 
     elif intent == IntentType.AGENT_COMPUTER_USE:
         goal = metadata.get("goal") or raw_query

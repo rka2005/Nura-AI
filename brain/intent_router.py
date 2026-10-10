@@ -80,6 +80,8 @@ class IntentType:
     AGENT_SCREEN_INSPECT = "AGENT_SCREEN_INSPECT"
     AGENT_OFFICE_SHOW = "AGENT_OFFICE_SHOW"
     AGENT_OFFICE_CLOSE = "AGENT_OFFICE_CLOSE"
+    AGENT_TERMINAL_VIEW_SHOW = "AGENT_TERMINAL_VIEW_SHOW"
+    AGENT_TERMINAL_VIEW_CLOSE = "AGENT_TERMINAL_VIEW_CLOSE"
     AGENT_COMPUTER_USE = "AGENT_COMPUTER_USE"
     AGENT_VULNERABILITY_SCAN = "AGENT_VULNERABILITY_SCAN"
     AGENT_ERROR_AUDIT = "AGENT_ERROR_AUDIT"
@@ -200,11 +202,30 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
     ])) and not any(neg in q for neg in ['close', 'hide', 'exit', 'dismiss', 'shut', 'leave', 'back', 'return']):
         return IntentType.AGENT_OFFICE_SHOW, {}
 
-    # Multi-Agent Subsystem: Task Status / "What are you doing?"
+    # Multi-Agent Subsystem: Live Terminal Testing View Toggle
+    if any(p in q for p in [
+        'close terminal view', 'hide terminal view', 'close live terminal', 'hide live terminal',
+        'close the live terminal', 'close the terminal view', 'hide the live terminal',
+        'close terminal', 'hide terminal', 'exit terminal'
+    ]):
+        return IntentType.AGENT_TERMINAL_VIEW_CLOSE, {}
+
+    if any(p in q for p in [
+        'show live terminal', 'open live terminal', 'show terminal view', 'open terminal view',
+        'show the live terminal', 'open the live terminal', 'show terminal testing', 'open terminal testing',
+        'view live terminal', 'display live terminal', 'see live terminal', 'show terminal', 'open terminal'
+    ]) and not any(p in q for p in ['close', 'hide', 'exit', 'dont', "don't"]):
+        return IntentType.AGENT_TERMINAL_VIEW_SHOW, {}
+
+    # Multi-Agent Subsystem: Task Status / "What are you doing?" / Testing Status
     if any(phrase in q for phrase in [
         'what are you doing', 'what are you working on', 'what are your active tasks',
         'what tasks are running', 'show active tasks', 'active tasks', 'current tasks',
-        'task status', 'agent status', 'show task status', 'what is running'
+        'task status', 'agent status', 'show task status', 'what is running',
+        'how is the test going', 'how is testing going', 'how is the testing',
+        'test status', 'testing status', 'is the test finished', 'is testing finished',
+        'is testing done', 'is the test done', 'check test status', 'check testing status',
+        'how is the project test going', 'how is testing progressing'
     ]):
         return IntentType.AGENT_STATUS, {}
 
@@ -277,6 +298,8 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
         or re.search(r"\b(?:test|inspect|audit|check)\s+([a-zA-Z0-9_\-]+\.(?:py|js|ts|jsx|tsx|html|css|json))\b", q)
         or re.search(r"\b(?:run|start|execute|perform|do|begin)\s+(?:the\s+|all\s+|project\s+|unit\s+|code\s+)?tests?\b", q)
         or re.search(r"\b(?:start|begin|do|perform)\s+testing\b", q)
+        or re.search(r"\b(?:test|inspect|audit|check|debug)\s+(?:and\s+debug\s+)?project\s+['\"]?[\w\-]+", q)
+        or re.search(r"\b(?:test\s+and\s+debug|inspect\s+and\s+test)\b", q)
         or q in ['test', 'testing', 'run tests', 'run test', 'start testing', 'test it', 'test this', 'test now', 'test all', 'test everything', 'run all tests']
         or any(p in q for p in [
             'test my project', 'test this project', 'test the project', 'test project',
@@ -309,8 +332,8 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
         proj_meta["from_screen"] = is_screen
 
         # 3. Detect File vs Project vs Screen Target
-        file_match = re.search(r"\b(?:specific\s+file|file|script)\s+([a-zA-Z0-9_\-\./\\]+)\b", q)
-        ext_match = re.search(r"\b([a-zA-Z0-9_\-]+\.(?:py|js|ts|jsx|tsx|html|css|json|cpp|c|java|go|rs|rb|php))\b", q)
+        file_match = re.search(r"\b(?:specific\s+file|file|script)\s+([a-zA-Z0-9_\-\./\\]+)\b", query, flags=re.IGNORECASE)
+        ext_match = re.search(r"\b([a-zA-Z0-9_\-]+\.(?:py|js|ts|jsx|tsx|html|css|json|cpp|c|java|go|rs|rb|php))\b", query, flags=re.IGNORECASE)
 
         if file_match and not any(file_match.group(1).lower().startswith(x) for x in ['on', 'in', 'at', 'that', 'with', 'from', 'to']):
             proj_meta["target_type"] = "file"
@@ -323,11 +346,19 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
             proj_meta["target_name"] = "current_file"
             proj_meta["from_screen"] = True
         else:
-            named_proj = re.search(r"\b(?:test|inspect|audit|check)\s+(?:(?:can\s+you\s+|please\s+|my\s+|this\s+|the\s+|a\s+)*)([\w\-\s]+?)\s+project\b", q)
-            if named_proj:
-                extracted_name = named_proj.group(1).strip()
+            named_proj_prefix = re.search(r"\b(?:test|inspect|audit|check|debug)\s+(?:(?:can\s+you\s+|please\s+|my\s+|this\s+|the\s+|a\s+|and\s+debug\s+)*)?project\s+['\"]?([a-zA-Z0-9_\-]+)['\"]?", query, flags=re.IGNORECASE)
+            named_proj_suffix = re.search(r"\b(?:test|inspect|audit|check)\s+(?:(?:can\s+you\s+|please\s+|my\s+|this\s+|the\s+|a\s+)*)([\w\-\s]+?)\s+project\b", query, flags=re.IGNORECASE)
+            
+            extracted_name = None
+            if named_proj_prefix:
+                extracted_name = named_proj_prefix.group(1).strip()
+            elif named_proj_suffix:
+                extracted_name = named_proj_suffix.group(1).strip()
+
+            if extracted_name:
                 cleaned_name = re.sub(r"^(?:current|this|my|the|a|active|visible)\s*", "", extracted_name, flags=re.IGNORECASE).strip()
-                if cleaned_name and cleaned_name.lower() not in ["", "current", "this", "my", "the", "a"]:
+                ignore_project_names = {"", "current", "this", "my", "the", "a", "with", "without", "that", "which", "now", "here", "please", "can", "you", "code"}
+                if cleaned_name and cleaned_name.lower() not in ignore_project_names:
                     proj_meta["target_type"] = "named_project"
                     proj_meta["target_name"] = cleaned_name
                 elif is_screen:

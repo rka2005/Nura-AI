@@ -77,6 +77,8 @@ class AgentOrchestrator:
         self.status_bridge_file = os.path.join(self.workspace, "status_bridge.json")
         self._custom_assigned_tasks: Dict[str, str] = {}
         self._release_timer: Optional[threading.Timer] = None
+        self.active_test_session: Optional[Dict[str, Any]] = None
+        self._test_worker_thread: Optional[threading.Thread] = None
 
         # Auto-subscribe to EventBus to sync live status on every event
         self.event_bus.subscribe(None, self._on_event_bus_update)
@@ -91,6 +93,7 @@ class AgentOrchestrator:
         terminal_allowed: bool = False,
         target_name: Optional[str] = None,
         from_screen: bool = False,
+        prefer_dedicated_gpu: bool = True,
     ) -> str:
         """
         Coordinates full project or specific file testing:
@@ -116,6 +119,7 @@ class AgentOrchestrator:
                 "terminal_allowed": terminal_allowed,
                 "target_name": target_name or target_desc,
                 "from_screen": from_screen,
+                "prefer_dedicated_gpu": prefer_dedicated_gpu,
             },
         )
 
@@ -131,6 +135,117 @@ class AgentOrchestrator:
                 return "Project testing completed."
         finally:
             self.release_agents(grace_period=3.5)
+
+    def start_background_test(
+        self,
+        workspace: Optional[str] = None,
+        target_file: Optional[str] = None,
+        terminal_allowed: bool = False,
+        target_name: Optional[str] = None,
+        from_screen: bool = False,
+        prefer_dedicated_gpu: bool = True,
+        on_complete_callback: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """
+        Launches ProjectAgent test execution in a non-blocking background worker thread.
+        Neura's main conversational brain remains completely unblocked and responsive
+        to user speech, questions, and other operations.
+        """
+        with self._lock:
+            if self.active_test_session and self.active_test_session.get("active"):
+                return {
+                    "already_running": True,
+                    "target": self.active_test_session.get("target"),
+                    "status": "RUNNING",
+                    "started_at": self.active_test_session.get("started_at"),
+                }
+
+            target_ws = workspace or self.workspace
+            target_desc = os.path.basename(target_file) if target_file else os.path.basename(target_ws)
+            if target_name:
+                target_desc = target_name
+
+            session = {
+                "active": True,
+                "target": target_desc,
+                "workspace": target_ws,
+                "target_file": target_file,
+                "terminal_allowed": terminal_allowed,
+                "started_at": time.time(),
+                "status": "RUNNING",
+                "summary": None,
+                "error": None,
+                "result": None,
+            }
+            self.active_test_session = session
+
+        def _worker():
+            try:
+                res_summary = self.test_project(
+                    workspace=target_ws,
+                    target_file=target_file,
+                    terminal_allowed=terminal_allowed,
+                    target_name=target_desc,
+                    from_screen=from_screen,
+                    prefer_dedicated_gpu=prefer_dedicated_gpu,
+                )
+                with self._lock:
+                    if self.active_test_session:
+                        self.active_test_session["active"] = False
+                        self.active_test_session["status"] = "PASSED" if not "failed" in res_summary.lower() else "FAILED"
+                        self.active_test_session["summary"] = res_summary
+                        self.active_test_session["result"] = getattr(self, "last_test_result", None)
+
+                if on_complete_callback and callable(on_complete_callback):
+                    try:
+                        on_complete_callback({
+                            "summary": res_summary,
+                            "last_test_result": getattr(self, "last_test_result", None),
+                            "full_report": getattr(self, "last_test_result", {}).get("full_report") if getattr(self, "last_test_result", None) else None,
+                        })
+                    except Exception as cb_err:
+                        logger.error(f"Error in background test callback: {cb_err}")
+
+            except Exception as e:
+                with self._lock:
+                    if self.active_test_session:
+                        self.active_test_session["active"] = False
+                        self.active_test_session["status"] = "ERROR"
+                        self.active_test_session["error"] = str(e)
+            finally:
+                with self._lock:
+                    if self.active_test_session:
+                        self.active_test_session["active"] = False
+
+        thread = threading.Thread(target=_worker, daemon=True, name=f"Neura-TestAgent-{target_desc}")
+        self._test_worker_thread = thread
+        thread.start()
+
+        return {
+            "already_running": False,
+            "target": target_desc,
+            "status": "STARTED",
+            "session": session,
+        }
+
+    def get_background_test_status(self) -> Dict[str, Any]:
+        """Returns the current status of background test execution."""
+        with self._lock:
+            if not self.active_test_session:
+                return {"active": False, "status": "IDLE"}
+
+            session_copy = dict(self.active_test_session)
+            # Read latest live_terminal data from status_bridge.json if available
+            try:
+                if os.path.exists(self.status_bridge_file):
+                    with open(self.status_bridge_file, "r", encoding="utf-8") as f:
+                        bridge_data = json.load(f)
+                    if "live_terminal" in bridge_data:
+                        session_copy["live_terminal"] = bridge_data["live_terminal"]
+            except Exception:
+                pass
+
+            return session_copy
 
     def test_file(self, file_path: str, terminal_allowed: bool = False) -> str:
         """Convenience method to test a specific single file."""

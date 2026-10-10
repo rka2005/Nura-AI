@@ -597,6 +597,11 @@ def fetch_chat_from_backend():
 
 
 OPTICS_SHOW_3D_OFFICE = False
+OPTICS_SHOW_LIVE_TERMINAL = False
+OPTICS_EXPAND_TERMINAL = False
+LIVE_TERMINAL_DATA = {}
+TERMINAL_LOG_CACHE = {"mtime": 0.0, "lines": []}
+TERMINAL_SCROLL_OFFSET = 0
 
 def set_optics_3d_office(show: bool):
     global OPTICS_SHOW_3D_OFFICE
@@ -623,13 +628,67 @@ def toggle_optics_view_mode():
     global OPTICS_SHOW_3D_OFFICE
     set_optics_3d_office(not OPTICS_SHOW_3D_OFFICE)
 
+def set_optics_live_terminal(show: bool):
+    global OPTICS_SHOW_LIVE_TERMINAL, OPTICS_EXPAND_TERMINAL, TERMINAL_SCROLL_OFFSET
+    OPTICS_SHOW_LIVE_TERMINAL = bool(show)
+    if not show:
+        OPTICS_EXPAND_TERMINAL = False
+    TERMINAL_SCROLL_OFFSET = 0
+    try:
+        data = {}
+        if os.path.exists(STATUS_BRIDGE_FILE):
+            try:
+                with open(STATUS_BRIDGE_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                data = {}
+        data["show_live_terminal"] = OPTICS_SHOW_LIVE_TERMINAL
+        temp_bridge = f"{STATUS_BRIDGE_FILE}.tmp"
+        with open(temp_bridge, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_bridge, STATUS_BRIDGE_FILE)
+    except Exception:
+        pass
+
+def toggle_optics_live_terminal():
+    global OPTICS_SHOW_LIVE_TERMINAL
+    set_optics_live_terminal(not OPTICS_SHOW_LIVE_TERMINAL)
+
+def set_optics_expanded_terminal(show: bool):
+    global OPTICS_EXPAND_TERMINAL, TERMINAL_SCROLL_OFFSET
+    OPTICS_EXPAND_TERMINAL = bool(show)
+    TERMINAL_SCROLL_OFFSET = 0
+
+def toggle_optics_expanded_terminal():
+    global OPTICS_EXPAND_TERMINAL, TERMINAL_SCROLL_OFFSET
+    OPTICS_EXPAND_TERMINAL = not OPTICS_EXPAND_TERMINAL
+    TERMINAL_SCROLL_OFFSET = 0
+
+def get_terminal_modal_close_rect():
+    modal_w = min(1200, WIDTH - 80)
+    modal_x = (WIDTH - modal_w) // 2
+    modal_y = 50
+    return pygame.Rect(modal_x + modal_w - 34, modal_y + 9, 24, 22)
+
+def get_optics_tab_rects():
+    panel_rect = LAYOUT.get("cam_panel", pygame.Rect(0, 0, 0, 0))
+    tab_w = 42
+    tab_h = 18
+    tab_y = panel_rect.y + 6
+    exp_rect = pygame.Rect(panel_rect.right - 28, tab_y, 22, tab_h)
+    term_rect = pygame.Rect(panel_rect.right - 28 - tab_w - 4, tab_y, tab_w, tab_h)
+    cam_rect = pygame.Rect(panel_rect.right - 28 - (tab_w * 2) - 8, tab_y, tab_w, tab_h)
+    return cam_rect, term_rect, exp_rect
+
 def sync_agent_office_states(agents_dict):
     global AGENT_OFFICE_INSTANCE
     if "AGENT_OFFICE_INSTANCE" in globals() and AGENT_OFFICE_INSTANCE:
         AGENT_OFFICE_INSTANCE.sync_from_bridge(agents_dict)
 
 def update_assistant_status():
-    global ASSISTANT_STATUS, LAST_STATUS_CHECK, OPTICS_SHOW_3D_OFFICE
+    global ASSISTANT_STATUS, LAST_STATUS_CHECK, OPTICS_SHOW_3D_OFFICE, OPTICS_SHOW_LIVE_TERMINAL, LIVE_TERMINAL_DATA
     now = time.time()
     if now - LAST_STATUS_CHECK < 0.2:
         return
@@ -642,6 +701,13 @@ def update_assistant_status():
                 ASSISTANT_STATUS = stat
                 if "show_agent_office" in data:
                     OPTICS_SHOW_3D_OFFICE = bool(data["show_agent_office"])
+                if "show_live_terminal" in data:
+                    OPTICS_SHOW_LIVE_TERMINAL = bool(data["show_live_terminal"])
+                if "live_terminal" in data and isinstance(data["live_terminal"], dict):
+                    LIVE_TERMINAL_DATA = data["live_terminal"]
+                    # If live testing is currently running, auto-activate terminal panel
+                    if LIVE_TERMINAL_DATA.get("active", False) and not OPTICS_SHOW_LIVE_TERMINAL:
+                        OPTICS_SHOW_LIVE_TERMINAL = True
                 if "agents" in data and isinstance(data["agents"], dict):
                     sync_agent_office_states(data["agents"])
         except Exception:
@@ -725,15 +791,16 @@ def draw_header_bar(surface):
         t_label = theme_font.render(theme_names[t_id], True, (240, 245, 255) if is_active else (160, 185, 215))
         surface.blit(t_label, (btn_rect.x + 16, btn_rect.y + 7))
 
-    # 4. Controls: MIC, CAM, 3D AGTS, BOLD, CLEAR
-    ctrl_x = WIDTH - 455
-    ctrl_btn_w = 58
+    # 4. Controls: MIC, CAM, TERM, 3D AGTS, BOLD, CLEAR
+    ctrl_x = WIDTH - 515
+    ctrl_btn_w = 54
     ctrl_btn_h = 24
     ctrl_font = pygame.font.SysFont("consolas", 9, bold=True)
 
     controls = [
         ("MIC", not MIC_MUTED, (80, 220, 120) if not MIC_MUTED else (255, 80, 80)),
-        ("CAM", CAMERA_ENABLED, (80, 200, 255) if CAMERA_ENABLED else (140, 150, 170)),
+        ("CAM", CAMERA_ENABLED and not OPTICS_SHOW_LIVE_TERMINAL, (80, 200, 255) if (CAMERA_ENABLED and not OPTICS_SHOW_LIVE_TERMINAL) else (140, 150, 170)),
+        ("TERM", OPTICS_SHOW_LIVE_TERMINAL, (0, 255, 180) if OPTICS_SHOW_LIVE_TERMINAL else (130, 160, 190)),
         ("3D AGTS", OPTICS_SHOW_3D_OFFICE, (0, 220, 255) if OPTICS_SHOW_3D_OFFICE else (120, 160, 200)),
         ("BOLD", ULTRA_BOLD, accent if ULTRA_BOLD else (130, 150, 180)),
         ("CLR", False, (220, 100, 120)),
@@ -765,15 +832,16 @@ def get_header_button_rects():
         for t_id in range(1, 5)
     ]
 
-    ctrl_x = WIDTH - 455
-    ctrl_btn_w = 58
+    ctrl_x = WIDTH - 515
+    ctrl_btn_w = 54
     ctrl_btn_h = 24
     ctrl_rects = {
         "MIC": pygame.Rect(ctrl_x + 0 * (ctrl_btn_w + 6), 14, ctrl_btn_w, ctrl_btn_h),
         "CAM": pygame.Rect(ctrl_x + 1 * (ctrl_btn_w + 6), 14, ctrl_btn_w, ctrl_btn_h),
-        "3D": pygame.Rect(ctrl_x + 2 * (ctrl_btn_w + 6), 14, ctrl_btn_w, ctrl_btn_h),
-        "BOLD": pygame.Rect(ctrl_x + 3 * (ctrl_btn_w + 6), 14, ctrl_btn_w, ctrl_btn_h),
-        "CLR": pygame.Rect(ctrl_x + 4 * (ctrl_btn_w + 6), 14, ctrl_btn_w, ctrl_btn_h),
+        "TERM": pygame.Rect(ctrl_x + 2 * (ctrl_btn_w + 6), 14, ctrl_btn_w, ctrl_btn_h),
+        "3D": pygame.Rect(ctrl_x + 3 * (ctrl_btn_w + 6), 14, ctrl_btn_w, ctrl_btn_h),
+        "BOLD": pygame.Rect(ctrl_x + 4 * (ctrl_btn_w + 6), 14, ctrl_btn_w, ctrl_btn_h),
+        "CLR": pygame.Rect(ctrl_x + 5 * (ctrl_btn_w + 6), 14, ctrl_btn_w, ctrl_btn_h),
     }
     return theme_rects, ctrl_rects
 
@@ -1118,7 +1186,11 @@ def draw_agent_workspace_popup(surface, t, dt, dots_sorted, amplitude):
 
 # -------------------- OPTICS / CAMERA VIEW MODULE --------------------
 def draw_camera_panel(surface, t, dt=16.0):
-    global CAMERA_SURFACE, CAMERA_ENABLED, CURRENT_FACE_LABEL, CURRENT_FACE_IS_OWNER, CURRENT_FACE_STATE, CURRENT_FACE_IDENTITY, face_system, is_learning_active
+    global CAMERA_SURFACE, CAMERA_ENABLED, CURRENT_FACE_LABEL, CURRENT_FACE_IS_OWNER, CURRENT_FACE_STATE, CURRENT_FACE_IDENTITY, face_system, is_learning_active, OPTICS_SHOW_LIVE_TERMINAL
+    if OPTICS_SHOW_LIVE_TERMINAL:
+        draw_live_terminal_panel(surface, t, dt)
+        return
+
     panel_rect = LAYOUT["cam_panel"]
 
     cam_inner_x = panel_rect.x + 8
@@ -1153,6 +1225,31 @@ def draw_camera_panel(surface, t, dt=16.0):
         badge = "SCANNING"
 
     draw_glass_panel(surface, panel_rect, "NEURA OPTICS // SCANNER", accent, None)
+
+    # Draw Optics Tabs: CAM (Active), TERM (Clickable), EXP (Expand)
+    cam_tab, term_tab, exp_tab = get_optics_tab_rects()
+    mpos = pygame.mouse.get_pos()
+    tab_font = pygame.font.SysFont("consolas", 8, bold=True)
+
+    # Active CAM tab
+    pygame.draw.rect(surface, (20, 42, 65), cam_tab, border_radius=4)
+    pygame.draw.rect(surface, accent, cam_tab, 1, border_radius=4)
+    c_lbl = tab_font.render("CAM", True, accent)
+    surface.blit(c_lbl, c_lbl.get_rect(center=cam_tab.center))
+
+    # Inactive TERM tab
+    term_hov = term_tab.collidepoint(mpos)
+    pygame.draw.rect(surface, (24, 38, 64) if term_hov else (12, 18, 32), term_tab, border_radius=4)
+    pygame.draw.rect(surface, (0, 220, 255) if term_hov else (40, 60, 95), term_tab, 1, border_radius=4)
+    t_lbl = tab_font.render("TERM", True, (0, 220, 255) if term_hov else (150, 175, 205))
+    surface.blit(t_lbl, t_lbl.get_rect(center=term_tab.center))
+
+    # Inactive EXP tab
+    exp_hov = exp_tab.collidepoint(mpos)
+    pygame.draw.rect(surface, (24, 38, 64) if exp_hov else (12, 18, 32), exp_tab, border_radius=4)
+    pygame.draw.rect(surface, (0, 240, 220) if exp_hov else (40, 60, 95), exp_tab, 1, border_radius=4)
+    e_lbl = tab_font.render("EXP", True, (0, 240, 220) if exp_hov else (150, 175, 205))
+    surface.blit(e_lbl, e_lbl.get_rect(center=exp_tab.center))
 
     if CAMERA_ENABLED and CAMERA_SURFACE is not None:
         scaled = pygame.transform.scale(CAMERA_SURFACE, (cam_inner_w, cam_inner_h))
@@ -1198,6 +1295,365 @@ def draw_camera_panel(surface, t, dt=16.0):
         font_cam = pygame.font.SysFont("consolas", 10, bold=True)
         msg = font_cam.render("OPTICS STANDBY // PRIVACY MODE", True, (130, 160, 200))
         surface.blit(msg, msg.get_rect(center=(cx, cy + r_max // 2 + 12)))
+
+
+def draw_live_terminal_panel(surface, t, dt=16.0):
+    global LIVE_TERMINAL_DATA, TERMINAL_LOG_CACHE, TERMINAL_SCROLL_OFFSET, OPTICS_EXPAND_TERMINAL
+    panel_rect = LAYOUT["cam_panel"]
+
+    is_active = LIVE_TERMINAL_DATA.get("active", False)
+    status_str = str(LIVE_TERMINAL_DATA.get("status", "READY")).upper()
+
+    if is_active:
+        accent = (0, 255, 170)
+        badge = "● EXECUTING"
+    elif status_str == "PASSED":
+        accent = (80, 255, 140)
+        badge = "PASSED"
+    elif status_str == "FAILED":
+        accent = (255, 80, 80)
+        badge = "FAILED"
+    else:
+        accent = (0, 220, 255)
+        badge = "READY"
+
+    draw_glass_panel(surface, panel_rect, "NEURA // LIVE TERMINAL", accent, None)
+
+    # Draw Optics Tabs: CAM (Clickable), TERM (Active), EXP (Expand Modal)
+    cam_tab, term_tab, exp_tab = get_optics_tab_rects()
+    mpos = pygame.mouse.get_pos()
+    tab_font = pygame.font.SysFont("consolas", 8, bold=True)
+
+    # Inactive CAM tab
+    cam_hov = cam_tab.collidepoint(mpos)
+    pygame.draw.rect(surface, (24, 38, 64) if cam_hov else (12, 18, 32), cam_tab, border_radius=4)
+    pygame.draw.rect(surface, (0, 220, 255) if cam_hov else (40, 60, 95), cam_tab, 1, border_radius=4)
+    c_lbl = tab_font.render("CAM", True, (0, 220, 255) if cam_hov else (150, 175, 205))
+    surface.blit(c_lbl, c_lbl.get_rect(center=cam_tab.center))
+
+    # Active TERM tab
+    pygame.draw.rect(surface, (16, 42, 60), term_tab, border_radius=4)
+    pygame.draw.rect(surface, accent, term_tab, 1, border_radius=4)
+    t_lbl = tab_font.render("TERM", True, accent)
+    surface.blit(t_lbl, t_lbl.get_rect(center=term_tab.center))
+
+    # Expand Tab / Button
+    exp_hov = exp_tab.collidepoint(mpos)
+    pygame.draw.rect(surface, (30, 50, 85) if exp_hov else (16, 26, 46), exp_tab, border_radius=4)
+    pygame.draw.rect(surface, (0, 240, 220) if exp_hov else (50, 75, 120), exp_tab, 1, border_radius=4)
+    e_lbl = tab_font.render("EXP", True, (0, 240, 220) if exp_hov else (170, 200, 235))
+    surface.blit(e_lbl, e_lbl.get_rect(center=exp_tab.center))
+
+    # Inner display viewport
+    inner_x = panel_rect.x + 8
+    inner_y = panel_rect.y + 28
+    inner_w = panel_rect.width - 16
+    inner_h = panel_rect.height - 36
+    inner_rect = pygame.Rect(inner_x, inner_y, inner_w, inner_h)
+
+    # Dark cyber console background
+    pygame.draw.rect(surface, (6, 11, 20), inner_rect, border_radius=4)
+    pygame.draw.rect(surface, (22, 42, 72), inner_rect, 1, border_radius=4)
+
+    # 1. Telemetry sub-header bar (GPU & Status)
+    sub_h = 20
+    sub_rect = pygame.Rect(inner_x, inner_y, inner_w, sub_h)
+    pygame.draw.rect(surface, (12, 22, 40), sub_rect, border_top_left_radius=4, border_top_right_radius=4)
+    pygame.draw.line(surface, (25, 48, 82), (inner_x, inner_y + sub_h), (inner_x + inner_w, inner_y + sub_h), 1)
+
+    gpu_name = LIVE_TERMINAL_DATA.get("compute_device") or "NVIDIA GeForce RTX 4050 Laptop GPU"
+    gpu_type = LIVE_TERMINAL_DATA.get("compute_type") or "DEDICATED"
+    cuda_id = LIVE_TERMINAL_DATA.get("cuda_device")
+    cuda_tag = f"CUDA:{cuda_id}" if cuda_id is not None else "DIRECT3D"
+
+    dev_short = f"[{gpu_type}] {gpu_name[:22]} ({cuda_tag})"
+    meta_font = pygame.font.SysFont("consolas", 8, bold=True)
+    surface.blit(meta_font.render(dev_short, True, (0, 240, 220)), (inner_x + 6, inner_y + 4))
+
+    # Status pill with pulsing LED
+    stat_surf = meta_font.render(badge, True, accent)
+    surface.blit(stat_surf, (inner_rect.right - stat_surf.get_width() - 6, inner_y + 4))
+
+    # 2. Dedicated Live Command Bar (High Contrast Amber/Yellow)
+    cmd_h = 20
+    cmd_rect = pygame.Rect(inner_x, inner_y + sub_h, inner_w, cmd_h)
+    pygame.draw.rect(surface, (14, 22, 38), cmd_rect)
+    pygame.draw.line(surface, (28, 50, 88), (inner_x, inner_y + sub_h + cmd_h), (inner_x + inner_w, inner_y + sub_h + cmd_h), 1)
+
+    active_cmd = str(LIVE_TERMINAL_DATA.get("command") or LIVE_TERMINAL_DATA.get("cmd_line") or "Awaiting test execution...")
+    cmd_tag = meta_font.render("CMD: ", True, (0, 220, 255))
+    surface.blit(cmd_tag, (inner_x + 6, inner_y + sub_h + 4))
+
+    avail_w = inner_w - cmd_tag.get_width() - 14
+    max_chars = max(10, avail_w // 6)
+    disp_cmd = active_cmd if len(active_cmd) <= max_chars else active_cmd[:max_chars - 3] + "..."
+    cmd_txt_surf = meta_font.render(disp_cmd, True, (255, 230, 110))
+    surface.blit(cmd_txt_surf, (inner_x + 6 + cmd_tag.get_width(), inner_y + sub_h + 4))
+
+    # Load terminal lines from live_terminal.log or bridge cache
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    log_file = os.path.join(base_dir, ".agents", "live_terminal.log")
+    display_lines = []
+    if os.path.exists(log_file):
+        try:
+            mtime = os.path.getmtime(log_file)
+            if mtime != TERMINAL_LOG_CACHE.get("mtime"):
+                with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+                    raw_lines = [line.rstrip("\r\n") for line in f.readlines() if line.strip()]
+                TERMINAL_LOG_CACHE["mtime"] = mtime
+                TERMINAL_LOG_CACHE["lines"] = raw_lines[-60:]
+            display_lines = TERMINAL_LOG_CACHE.get("lines", [])
+        except Exception:
+            display_lines = LIVE_TERMINAL_DATA.get("last_lines", [])
+    else:
+        display_lines = LIVE_TERMINAL_DATA.get("last_lines", [])
+
+    if not display_lines:
+        display_lines = [
+            ">> NEURA LIVE TERMINAL MATRIX INITIALIZED",
+            f">> Compute Device: {gpu_name} [{gpu_type}]",
+            ">> Ready for automated & interactive testing suites.",
+            ">> Real-time test output streams here continuously."
+        ]
+
+    # 3. Render console output lines
+    top_offset = sub_h + cmd_h
+    line_font = pygame.font.SysFont("consolas", 8)
+    line_h = 12
+    view_h = inner_h - top_offset - 8
+    max_visible = max(1, view_h // line_h)
+
+    # Apply scroll offset if user scrolled
+    total_lines = len(display_lines)
+    start_idx = max(0, total_lines - max_visible - TERMINAL_SCROLL_OFFSET)
+    visible_lines = display_lines[start_idx : start_idx + max_visible]
+
+    clip_prev = surface.get_clip()
+    surface.set_clip(pygame.Rect(inner_x, inner_y + top_offset + 2, inner_w, view_h + 4))
+
+    y_pos = inner_y + top_offset + 4
+    for line in visible_lines:
+        text = str(line)
+        # Syntax highlight
+        if "PASSED" in text or "passed" in text or "[OK]" in text or "SUCCESS" in text or "[PASS]" in text:
+            col = (90, 255, 150)
+        elif "FAILED" in text or "failed" in text or "ERROR" in text or "Traceback" in text or "[FAIL]" in text:
+            col = (255, 95, 95)
+        elif "WARNING" in text or "warning" in text or "STEP" in text:
+            col = (255, 210, 80)
+        elif "GPU" in text or "CUDA" in text or "DEDICATED" in text or "COMMAND" in text:
+            col = (0, 230, 255)
+        elif text.startswith("==") or text.startswith("--") or text.startswith(">>"):
+            col = (0, 200, 255)
+        else:
+            col = (205, 225, 245)
+
+        # Truncate if line exceeds width
+        max_chars = max(10, inner_w // 7)
+        if len(text) > max_chars:
+            text = text[:max_chars - 3] + "..."
+
+        line_surf = line_font.render(text, True, col)
+        surface.blit(line_surf, (inner_x + 8, y_pos))
+        y_pos += line_h
+
+    # Blinking terminal cursor
+    if is_active or ((int(t * 0.003)) % 2 == 0):
+        cur_surf = line_font.render("█", True, accent)
+        surface.blit(cur_surf, (inner_x + 8, min(y_pos, inner_rect.bottom - 14)))
+
+    surface.set_clip(clip_prev)
+
+
+def draw_expanded_live_terminal_modal(surface, t, dt=16.0):
+    """Draws a full-screen cyber terminal modal overlay for in-depth inspection of test logs."""
+    global LIVE_TERMINAL_DATA, TERMINAL_LOG_CACHE, TERMINAL_SCROLL_OFFSET, OPTICS_EXPAND_TERMINAL
+
+    is_active = LIVE_TERMINAL_DATA.get("active", False)
+    status_str = str(LIVE_TERMINAL_DATA.get("status", "READY")).upper()
+
+    if is_active:
+        accent = (0, 255, 170)
+        badge = "● EXECUTING LIVE"
+    elif status_str == "PASSED":
+        accent = (80, 255, 140)
+        badge = "✓ TESTS PASSED"
+    elif status_str == "FAILED":
+        accent = (255, 80, 80)
+        badge = "✗ TESTS FAILED"
+    else:
+        accent = (0, 220, 255)
+        badge = "READY / IDLE"
+
+    # Semi-transparent background dimming overlay
+    dim_surf = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+    dim_surf.fill((4, 9, 20, 225))
+    surface.blit(dim_surf, (0, 0))
+
+    # Center Modal Window Rect
+    modal_w = min(1200, WIDTH - 80)
+    modal_h = min(760, HEIGHT - 90)
+    modal_x = (WIDTH - modal_w) // 2
+    modal_y = 50
+    modal_rect = pygame.Rect(modal_x, modal_y, modal_w, modal_h)
+
+    # Modal Background and Border
+    pygame.draw.rect(surface, (8, 14, 28), modal_rect, border_radius=8)
+    pygame.draw.rect(surface, accent, modal_rect, 2, border_radius=8)
+
+    # Corner cyber accents
+    c_len = 16
+    for cx, cy, dx, dy in [
+        (modal_rect.left, modal_rect.top, 1, 1),
+        (modal_rect.right, modal_rect.top, -1, 1),
+        (modal_rect.left, modal_rect.bottom, 1, -1),
+        (modal_rect.right, modal_rect.bottom, -1, -1),
+    ]:
+        pygame.draw.line(surface, (0, 255, 255), (cx, cy), (cx + dx * c_len, cy), 3)
+        pygame.draw.line(surface, (0, 255, 255), (cx, cy), (cx, cy + dy * c_len), 3)
+
+    # Header Bar
+    hdr_h = 40
+    hdr_rect = pygame.Rect(modal_x, modal_y, modal_w, hdr_h)
+    pygame.draw.rect(surface, (12, 22, 44), hdr_rect, border_top_left_radius=8, border_top_right_radius=8)
+    pygame.draw.line(surface, (30, 56, 96), (modal_x, modal_y + hdr_h), (modal_x + modal_w, modal_y + hdr_h), 1)
+
+    title_font = pygame.font.SysFont("consolas", 13, bold=True)
+    meta_font = pygame.font.SysFont("consolas", 10, bold=True)
+
+    title_surf = title_font.render("NEURA LIVE TERMINAL MATRIX // TEST AGENT CONSOLE", True, (240, 250, 255))
+    surface.blit(title_surf, (modal_x + 16, modal_y + 11))
+
+    # GPU Hardware Info
+    gpu_name = LIVE_TERMINAL_DATA.get("compute_device") or "NVIDIA GeForce RTX 4050 Laptop GPU"
+    gpu_type = LIVE_TERMINAL_DATA.get("compute_type") or "DEDICATED"
+    cuda_id = LIVE_TERMINAL_DATA.get("cuda_device")
+    cuda_tag = f"CUDA:{cuda_id}" if cuda_id is not None else "DIRECT3D"
+    dev_str = f"COMPUTE: [{gpu_type}] {gpu_name[:24]} ({cuda_tag})"
+    dev_surf = meta_font.render(dev_str, True, (0, 240, 220))
+    surface.blit(dev_surf, (modal_x + title_surf.get_width() + 24, modal_y + 13))
+
+    # Status Badge
+    stat_surf = meta_font.render(badge, True, accent)
+    surface.blit(stat_surf, (modal_x + modal_w - 180, modal_y + 13))
+
+    # Close button [×]
+    close_btn = get_terminal_modal_close_rect()
+    mpos = pygame.mouse.get_pos()
+    c_hov = close_btn.collidepoint(mpos)
+    pygame.draw.rect(surface, (120, 30, 50) if c_hov else (36, 22, 38), close_btn, border_radius=4)
+    pygame.draw.rect(surface, (255, 100, 120), close_btn, 1, border_radius=4)
+    c_font = pygame.font.SysFont("consolas", 14, bold=True)
+    c_text = c_font.render("×", True, (255, 230, 240))
+    surface.blit(c_text, c_text.get_rect(center=close_btn.center))
+
+    # Command & Working Dir Strip (Height 32px)
+    cmd_strip_h = 32
+    cmd_strip_y = modal_y + hdr_h
+    cmd_strip_rect = pygame.Rect(modal_x, cmd_strip_y, modal_w, cmd_strip_h)
+    pygame.draw.rect(surface, (14, 24, 46), cmd_strip_rect)
+    pygame.draw.line(surface, (30, 55, 95), (modal_x, cmd_strip_y + cmd_strip_h), (modal_x + modal_w, cmd_strip_y + cmd_strip_h), 1)
+
+    cmd_lbl = meta_font.render("RUNNING COMMAND: ", True, (0, 220, 255))
+    surface.blit(cmd_lbl, (modal_x + 16, cmd_strip_y + 8))
+
+    active_cmd = str(LIVE_TERMINAL_DATA.get("command") or LIVE_TERMINAL_DATA.get("cmd_line") or "Awaiting execution...")
+    cmd_val_font = pygame.font.SysFont("consolas", 11, bold=True)
+    cmd_val_surf = cmd_val_font.render(active_cmd, True, (255, 235, 120))
+    surface.blit(cmd_val_surf, (modal_x + 16 + cmd_lbl.get_width(), cmd_strip_y + 8))
+
+    # Console Body Viewport
+    footer_h = 28
+    view_y = cmd_strip_y + cmd_strip_h + 8
+    view_h = modal_h - hdr_h - cmd_strip_h - footer_h - 16
+    view_w = modal_w - 24
+    view_x = modal_x + 12
+    view_rect = pygame.Rect(view_x, view_y, view_w, view_h)
+
+    pygame.draw.rect(surface, (4, 8, 16), view_rect, border_radius=4)
+    pygame.draw.rect(surface, (20, 38, 68), view_rect, 1, border_radius=4)
+
+    # Load terminal lines
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    log_file = os.path.join(base_dir, ".agents", "live_terminal.log")
+    display_lines = []
+    if os.path.exists(log_file):
+        try:
+            mtime = os.path.getmtime(log_file)
+            if mtime != TERMINAL_LOG_CACHE.get("mtime"):
+                with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+                    raw_lines = [line.rstrip("\r\n") for line in f.readlines() if line.strip()]
+                TERMINAL_LOG_CACHE["mtime"] = mtime
+                TERMINAL_LOG_CACHE["lines"] = raw_lines[-150:]
+            display_lines = TERMINAL_LOG_CACHE.get("lines", [])
+        except Exception:
+            display_lines = LIVE_TERMINAL_DATA.get("lines", [])
+    else:
+        display_lines = LIVE_TERMINAL_DATA.get("lines", [])
+
+    if not display_lines:
+        display_lines = [
+            ">> NEURA LIVE TERMINAL MATRIX INITIALIZED",
+            f">> Compute Hardware: {gpu_name} [{gpu_type}]",
+            ">> Background Testing Agent is ready. Real-time test output streams here.",
+            ">> Neura remains fully listening and responsive to your voice and commands."
+        ]
+
+    line_font = pygame.font.SysFont("consolas", 11)
+    line_h = 16
+    max_visible = max(1, view_h // line_h)
+
+    total_lines = len(display_lines)
+    start_idx = max(0, total_lines - max_visible - TERMINAL_SCROLL_OFFSET)
+    visible_lines = display_lines[start_idx : start_idx + max_visible]
+
+    clip_prev = surface.get_clip()
+    surface.set_clip(pygame.Rect(view_x, view_y, view_w, view_h))
+
+    y_pos = view_y + 6
+    for line in visible_lines:
+        text = str(line)
+        if "PASSED" in text or "passed" in text or "[OK]" in text or "SUCCESS" in text or "[PASS]" in text:
+            col = (90, 255, 150)
+        elif "FAILED" in text or "failed" in text or "ERROR" in text or "Traceback" in text or "[FAIL]" in text:
+            col = (255, 95, 95)
+        elif "WARNING" in text or "warning" in text or "STEP" in text:
+            col = (255, 215, 80)
+        elif "GPU" in text or "CUDA" in text or "DEDICATED" in text or "COMMAND" in text:
+            col = (0, 230, 255)
+        elif text.startswith("==") or text.startswith("--") or text.startswith(">>"):
+            col = (0, 200, 255)
+        else:
+            col = (215, 230, 250)
+
+        line_surf = line_font.render(text, True, col)
+        surface.blit(line_surf, (view_x + 12, y_pos))
+        y_pos += line_h
+
+    # Blinking cursor
+    if is_active or ((int(t * 0.003)) % 2 == 0):
+        cur_surf = line_font.render("█", True, accent)
+        surface.blit(cur_surf, (view_x + 12, min(y_pos, view_rect.bottom - 18)))
+
+    surface.set_clip(clip_prev)
+
+    # Footer Status & Help Bar
+    footer_rect = pygame.Rect(modal_x, modal_rect.bottom - footer_h, modal_w, footer_h)
+    pygame.draw.rect(surface, (10, 18, 36), footer_rect, border_bottom_left_radius=8, border_bottom_right_radius=8)
+    pygame.draw.line(surface, (25, 45, 80), (modal_x, footer_rect.top), (modal_x + modal_w, footer_rect.top), 1)
+
+    hint_font = pygame.font.SysFont("consolas", 9, bold=True)
+    hint_surf = hint_font.render(
+        "▲▼ Scroll with mouse wheel | Click × or press ESC to minimize | Neura voice listener is active",
+        True,
+        (130, 170, 210)
+    )
+    surface.blit(hint_surf, (modal_x + 16, footer_rect.top + 7))
+
+    # Lines counter on right side of footer
+    scroll_info = f"Lines: {total_lines} (Showing {start_idx + 1}-{min(total_lines, start_idx + max_visible)})"
+    info_surf = hint_font.render(scroll_info, True, (100, 145, 190))
+    surface.blit(info_surf, (modal_x + modal_w - info_surf.get_width() - 16, footer_rect.top + 7))
 
 
 # -------------------- NEURAL MEMORY CORE MODULE --------------------
@@ -1600,6 +2056,7 @@ def main():
     global active_person_spoken, candidate_person, candidate_streak, no_face_start_time, last_speech_time, is_first_startup_greeting
     global unknown_start_time, unknown_person_confirmed
     global is_learning_active, learning_step, learning_name, learning_samples, learning_started_time, last_unknown_prompt_time, last_sample_cap_time
+    global OPTICS_EXPAND_TERMINAL, OPTICS_SHOW_LIVE_TERMINAL, OPTICS_SHOW_3D_OFFICE, TERMINAL_SCROLL_OFFSET
 
     try:
         face_system = get_face_system()
@@ -1913,6 +2370,16 @@ def main():
                         handle_workspace_popup_click(mpos)
                         continue
 
+                    # If expanded terminal modal is open, handle modal interactions
+                    if OPTICS_EXPAND_TERMINAL and OPTICS_SHOW_LIVE_TERMINAL:
+                        close_btn = get_terminal_modal_close_rect()
+                        modal_w = min(1200, WIDTH - 80)
+                        modal_h = min(760, HEIGHT - 90)
+                        modal_rect = pygame.Rect((WIDTH - modal_w) // 2, 50, modal_w, modal_h)
+                        if close_btn.collidepoint(mpos) or not modal_rect.collidepoint(mpos):
+                            set_optics_expanded_terminal(False)
+                        continue
+
                     # 1. Header controls & themes
                     theme_rects, ctrl_rects = get_header_button_rects()
                     for tid, trect in theme_rects:
@@ -1923,12 +2390,27 @@ def main():
                         MIC_MUTED = not MIC_MUTED
                     elif ctrl_rects["CAM"].collidepoint(mpos):
                         CAMERA_ENABLED = not CAMERA_ENABLED
+                        if CAMERA_ENABLED:
+                            set_optics_live_terminal(False)
+                    elif "TERM" in ctrl_rects and ctrl_rects["TERM"].collidepoint(mpos):
+                        toggle_optics_live_terminal()
                     elif "3D" in ctrl_rects and ctrl_rects["3D"].collidepoint(mpos):
                         toggle_optics_view_mode()
                     elif ctrl_rects["BOLD"].collidepoint(mpos):
                         ULTRA_BOLD = not ULTRA_BOLD
                     elif ctrl_rects["CLR"].collidepoint(mpos):
                         clear_chat_history()
+
+                    # 1b. Optics CAM vs TERM vs EXP tabs
+                    cam_tab, term_tab, exp_tab = get_optics_tab_rects()
+                    if cam_tab.collidepoint(mpos):
+                        set_optics_live_terminal(False)
+                    elif term_tab.collidepoint(mpos):
+                        set_optics_live_terminal(True)
+                    elif exp_tab.collidepoint(mpos):
+                        if not OPTICS_SHOW_LIVE_TERMINAL:
+                            set_optics_live_terminal(True)
+                        toggle_optics_expanded_terminal()
 
                     # 2. Quick Action Chips
                     for qrect, (_, akey, ptext, _) in zip(get_quick_action_rects(), QUICK_ACTIONS):
@@ -1947,13 +2429,24 @@ def main():
                             INPUT_ACTIVE = True
 
                 elif event.type == pygame.MOUSEWHEEL:
+                    if OPTICS_EXPAND_TERMINAL and OPTICS_SHOW_LIVE_TERMINAL:
+                        TERMINAL_SCROLL_OFFSET -= event.y * 3
+                        TERMINAL_SCROLL_OFFSET = max(0, TERMINAL_SCROLL_OFFSET)
+                        continue
                     if not OPTICS_SHOW_3D_OFFICE:
                         mx, my = pygame.mouse.get_pos()
                         if LAYOUT["chat_panel"].collidepoint(mx, my):
                             CHAT_SCROLL_OFFSET -= event.y * 24
                             CHAT_SCROLL_OFFSET = max(0, CHAT_SCROLL_OFFSET)
+                        elif OPTICS_SHOW_LIVE_TERMINAL and LAYOUT["cam_panel"].collidepoint(mx, my):
+                            TERMINAL_SCROLL_OFFSET -= event.y * 2
+                            TERMINAL_SCROLL_OFFSET = max(0, TERMINAL_SCROLL_OFFSET)
 
                 elif event.type == pygame.KEYDOWN:
+                    if OPTICS_EXPAND_TERMINAL:
+                        if event.key == pygame.K_ESCAPE:
+                            set_optics_expanded_terminal(False)
+                            continue
                     if OPTICS_SHOW_3D_OFFICE:
                         if event.key == pygame.K_ESCAPE:
                             set_optics_3d_office(False)
@@ -2065,6 +2558,10 @@ def main():
                 draw_header_bar(screen)
                 fps = clock.get_fps()
                 draw_status_bar(screen, fps)
+
+                # Expanded Live Terminal Modal overlay
+                if OPTICS_EXPAND_TERMINAL and OPTICS_SHOW_LIVE_TERMINAL:
+                    draw_expanded_live_terminal_modal(screen, t, dt)
 
             pygame.display.flip()
 
