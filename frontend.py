@@ -336,15 +336,16 @@ def recalc_layout(width, height):
     LAYOUT["quick_actions"] = pygame.Rect(left_x, content_y + chat_h + pad, left_w, quick_act_h)
     LAYOUT["input_box"] = pygame.Rect(left_x, content_y + chat_h + quick_act_h + (pad * 2), left_w, input_box_h)
 
-    # Right Column: Vision, Memory, Hardware Performance
+    # Right Column: Vision Scanner, Live Terminal View, Hardware Performance
     right_x = WIDTH - right_w - pad
-    cam_h = int(content_h * 0.31)
-    mem_h = int(content_h * 0.30)
-    perf_h = content_h - cam_h - mem_h - (pad * 2)
+    cam_h = int(content_h * 0.30)
+    term_h = int(content_h * 0.36)
+    perf_h = content_h - cam_h - term_h - (pad * 2)
 
     LAYOUT["cam_panel"] = pygame.Rect(right_x, content_y, right_w, cam_h)
-    LAYOUT["mem_panel"] = pygame.Rect(right_x, content_y + cam_h + pad, right_w, mem_h)
-    LAYOUT["perf_panel"] = pygame.Rect(right_x, content_y + cam_h + mem_h + (pad * 2), right_w, perf_h)
+    LAYOUT["term_panel"] = pygame.Rect(right_x, content_y + cam_h + pad, right_w, term_h)
+    LAYOUT["mem_panel"] = LAYOUT["term_panel"]  # Compatibility alias
+    LAYOUT["perf_panel"] = pygame.Rect(right_x, content_y + cam_h + term_h + (pad * 2), right_w, perf_h)
 
     # Center Column Area
     center_w = right_x - (left_x + left_w) - (pad * 2)
@@ -679,8 +680,16 @@ def get_optics_tab_rects():
     tab_y = panel_rect.y + 6
     exp_rect = pygame.Rect(panel_rect.right - 28, tab_y, 22, tab_h)
     term_rect = pygame.Rect(panel_rect.right - 28 - tab_w - 4, tab_y, tab_w, tab_h)
-    cam_rect = pygame.Rect(panel_rect.right - 28 - (tab_w * 2) - 8, tab_y, tab_w, tab_h)
+    cam_rect = pygame.Rect(panel_rect.right - 52, tab_y, 44, tab_h)
     return cam_rect, term_rect, exp_rect
+
+def get_terminal_panel_button_rects():
+    panel_rect = LAYOUT.get("term_panel", LAYOUT.get("mem_panel", pygame.Rect(0, 0, 0, 0)))
+    btn_h = 18
+    btn_y = panel_rect.y + 6
+    exp_rect = pygame.Rect(panel_rect.right - 34, btn_y, 26, btn_h)
+    clr_rect = pygame.Rect(panel_rect.right - 34 - 30, btn_y, 26, btn_h)
+    return exp_rect, clr_rect
 
 def sync_agent_office_states(agents_dict):
     global AGENT_OFFICE_INSTANCE
@@ -688,7 +697,7 @@ def sync_agent_office_states(agents_dict):
         AGENT_OFFICE_INSTANCE.sync_from_bridge(agents_dict)
 
 def update_assistant_status():
-    global ASSISTANT_STATUS, LAST_STATUS_CHECK, OPTICS_SHOW_3D_OFFICE, OPTICS_SHOW_LIVE_TERMINAL, LIVE_TERMINAL_DATA
+    global ASSISTANT_STATUS, LAST_STATUS_CHECK, OPTICS_SHOW_3D_OFFICE, OPTICS_SHOW_LIVE_TERMINAL, OPTICS_EXPAND_TERMINAL, LIVE_TERMINAL_DATA
     now = time.time()
     if now - LAST_STATUS_CHECK < 0.2:
         return
@@ -703,11 +712,10 @@ def update_assistant_status():
                     OPTICS_SHOW_3D_OFFICE = bool(data["show_agent_office"])
                 if "show_live_terminal" in data:
                     OPTICS_SHOW_LIVE_TERMINAL = bool(data["show_live_terminal"])
+                if "expand_live_terminal" in data:
+                    OPTICS_EXPAND_TERMINAL = bool(data["expand_live_terminal"])
                 if "live_terminal" in data and isinstance(data["live_terminal"], dict):
                     LIVE_TERMINAL_DATA = data["live_terminal"]
-                    # If live testing is currently running, auto-activate terminal panel
-                    if LIVE_TERMINAL_DATA.get("active", False) and not OPTICS_SHOW_LIVE_TERMINAL:
-                        OPTICS_SHOW_LIVE_TERMINAL = True
                 if "agents" in data and isinstance(data["agents"], dict):
                     sync_agent_office_states(data["agents"])
         except Exception:
@@ -799,8 +807,8 @@ def draw_header_bar(surface):
 
     controls = [
         ("MIC", not MIC_MUTED, (80, 220, 120) if not MIC_MUTED else (255, 80, 80)),
-        ("CAM", CAMERA_ENABLED and not OPTICS_SHOW_LIVE_TERMINAL, (80, 200, 255) if (CAMERA_ENABLED and not OPTICS_SHOW_LIVE_TERMINAL) else (140, 150, 170)),
-        ("TERM", OPTICS_SHOW_LIVE_TERMINAL, (0, 255, 180) if OPTICS_SHOW_LIVE_TERMINAL else (130, 160, 190)),
+        ("CAM", CAMERA_ENABLED, (80, 200, 255) if CAMERA_ENABLED else (140, 150, 170)),
+        ("TERM", OPTICS_EXPAND_TERMINAL or LIVE_TERMINAL_DATA.get("active", False), (0, 255, 180) if (OPTICS_EXPAND_TERMINAL or LIVE_TERMINAL_DATA.get("active", False)) else (130, 160, 190)),
         ("3D AGTS", OPTICS_SHOW_3D_OFFICE, (0, 220, 255) if OPTICS_SHOW_3D_OFFICE else (120, 160, 200)),
         ("BOLD", ULTRA_BOLD, accent if ULTRA_BOLD else (130, 150, 180)),
         ("CLR", False, (220, 100, 120)),
@@ -1186,11 +1194,7 @@ def draw_agent_workspace_popup(surface, t, dt, dots_sorted, amplitude):
 
 # -------------------- OPTICS / CAMERA VIEW MODULE --------------------
 def draw_camera_panel(surface, t, dt=16.0):
-    global CAMERA_SURFACE, CAMERA_ENABLED, CURRENT_FACE_LABEL, CURRENT_FACE_IS_OWNER, CURRENT_FACE_STATE, CURRENT_FACE_IDENTITY, face_system, is_learning_active, OPTICS_SHOW_LIVE_TERMINAL
-    if OPTICS_SHOW_LIVE_TERMINAL:
-        draw_live_terminal_panel(surface, t, dt)
-        return
-
+    global CAMERA_SURFACE, CAMERA_ENABLED, CURRENT_FACE_LABEL, CURRENT_FACE_IS_OWNER, CURRENT_FACE_STATE, CURRENT_FACE_IDENTITY, face_system, is_learning_active
     panel_rect = LAYOUT["cam_panel"]
 
     cam_inner_x = panel_rect.x + 8
@@ -1221,35 +1225,25 @@ def draw_camera_panel(surface, t, dt=16.0):
         accent = (255, 100, 100)
         badge = "NO TARGET"
     else:
-        accent = (0, 200, 255)
+        accent = (0, 220, 255)
         badge = "SCANNING"
 
     draw_glass_panel(surface, panel_rect, "NEURA OPTICS // SCANNER", accent, None)
 
-    # Draw Optics Tabs: CAM (Active), TERM (Clickable), EXP (Expand)
-    cam_tab, term_tab, exp_tab = get_optics_tab_rects()
+    # Camera status / toggle pill on top-right
+    cam_pill = pygame.Rect(panel_rect.right - 56, panel_rect.y + 6, 48, 18)
     mpos = pygame.mouse.get_pos()
-    tab_font = pygame.font.SysFont("consolas", 8, bold=True)
-
-    # Active CAM tab
-    pygame.draw.rect(surface, (20, 42, 65), cam_tab, border_radius=4)
-    pygame.draw.rect(surface, accent, cam_tab, 1, border_radius=4)
-    c_lbl = tab_font.render("CAM", True, accent)
-    surface.blit(c_lbl, c_lbl.get_rect(center=cam_tab.center))
-
-    # Inactive TERM tab
-    term_hov = term_tab.collidepoint(mpos)
-    pygame.draw.rect(surface, (24, 38, 64) if term_hov else (12, 18, 32), term_tab, border_radius=4)
-    pygame.draw.rect(surface, (0, 220, 255) if term_hov else (40, 60, 95), term_tab, 1, border_radius=4)
-    t_lbl = tab_font.render("TERM", True, (0, 220, 255) if term_hov else (150, 175, 205))
-    surface.blit(t_lbl, t_lbl.get_rect(center=term_tab.center))
-
-    # Inactive EXP tab
-    exp_hov = exp_tab.collidepoint(mpos)
-    pygame.draw.rect(surface, (24, 38, 64) if exp_hov else (12, 18, 32), exp_tab, border_radius=4)
-    pygame.draw.rect(surface, (0, 240, 220) if exp_hov else (40, 60, 95), exp_tab, 1, border_radius=4)
-    e_lbl = tab_font.render("EXP", True, (0, 240, 220) if exp_hov else (150, 175, 205))
-    surface.blit(e_lbl, e_lbl.get_rect(center=exp_tab.center))
+    cam_hov = cam_pill.collidepoint(mpos)
+    pill_font = pygame.font.SysFont("consolas", 8, bold=True)
+    if CAMERA_ENABLED:
+        pygame.draw.rect(surface, (16, 42, 60) if not cam_hov else (24, 60, 85), cam_pill, border_radius=4)
+        pygame.draw.rect(surface, (0, 255, 180), cam_pill, 1, border_radius=4)
+        lbl = pill_font.render("CAM ON", True, (0, 255, 180))
+    else:
+        pygame.draw.rect(surface, (24, 28, 38) if not cam_hov else (38, 44, 58), cam_pill, border_radius=4)
+        pygame.draw.rect(surface, (80, 95, 120), cam_pill, 1, border_radius=4)
+        lbl = pill_font.render("STANDBY", True, (140, 155, 175))
+    surface.blit(lbl, lbl.get_rect(center=cam_pill.center))
 
     if CAMERA_ENABLED and CAMERA_SURFACE is not None:
         scaled = pygame.transform.scale(CAMERA_SURFACE, (cam_inner_w, cam_inner_h))
@@ -1297,9 +1291,9 @@ def draw_camera_panel(surface, t, dt=16.0):
         surface.blit(msg, msg.get_rect(center=(cx, cy + r_max // 2 + 12)))
 
 
-def draw_live_terminal_panel(surface, t, dt=16.0):
+def draw_live_terminal_panel(surface, t=0.0, dt=16.0):
     global LIVE_TERMINAL_DATA, TERMINAL_LOG_CACHE, TERMINAL_SCROLL_OFFSET, OPTICS_EXPAND_TERMINAL
-    panel_rect = LAYOUT["cam_panel"]
+    panel_rect = LAYOUT.get("term_panel", LAYOUT.get("mem_panel"))
 
     is_active = LIVE_TERMINAL_DATA.get("active", False)
     status_str = str(LIVE_TERMINAL_DATA.get("status", "READY")).upper()
@@ -1309,40 +1303,35 @@ def draw_live_terminal_panel(surface, t, dt=16.0):
         badge = "● EXECUTING"
     elif status_str == "PASSED":
         accent = (80, 255, 140)
-        badge = "PASSED"
+        badge = "✓ PASSED"
     elif status_str == "FAILED":
         accent = (255, 80, 80)
-        badge = "FAILED"
+        badge = "✗ FAILED"
     else:
         accent = (0, 220, 255)
-        badge = "READY"
+        badge = "● READY"
 
     draw_glass_panel(surface, panel_rect, "NEURA // LIVE TERMINAL", accent, None)
 
-    # Draw Optics Tabs: CAM (Clickable), TERM (Active), EXP (Expand Modal)
-    cam_tab, term_tab, exp_tab = get_optics_tab_rects()
+    # Top-right header buttons: CLR and EXP
+    exp_btn, clr_btn = get_terminal_panel_button_rects()
     mpos = pygame.mouse.get_pos()
     tab_font = pygame.font.SysFont("consolas", 8, bold=True)
 
-    # Inactive CAM tab
-    cam_hov = cam_tab.collidepoint(mpos)
-    pygame.draw.rect(surface, (24, 38, 64) if cam_hov else (12, 18, 32), cam_tab, border_radius=4)
-    pygame.draw.rect(surface, (0, 220, 255) if cam_hov else (40, 60, 95), cam_tab, 1, border_radius=4)
-    c_lbl = tab_font.render("CAM", True, (0, 220, 255) if cam_hov else (150, 175, 205))
-    surface.blit(c_lbl, c_lbl.get_rect(center=cam_tab.center))
+    # Inactive/active CLR button
+    clr_hov = clr_btn.collidepoint(mpos)
+    clr_active = TERMINAL_SCROLL_OFFSET > 0
+    pygame.draw.rect(surface, (32, 50, 75) if clr_hov else ((22, 34, 52) if clr_active else (12, 18, 30)), clr_btn, border_radius=4)
+    pygame.draw.rect(surface, (0, 220, 255) if (clr_hov or clr_active) else (40, 60, 95), clr_btn, 1, border_radius=4)
+    c_lbl = tab_font.render("CLR", True, (0, 240, 255) if (clr_hov or clr_active) else (140, 165, 195))
+    surface.blit(c_lbl, c_lbl.get_rect(center=clr_btn.center))
 
-    # Active TERM tab
-    pygame.draw.rect(surface, (16, 42, 60), term_tab, border_radius=4)
-    pygame.draw.rect(surface, accent, term_tab, 1, border_radius=4)
-    t_lbl = tab_font.render("TERM", True, accent)
-    surface.blit(t_lbl, t_lbl.get_rect(center=term_tab.center))
-
-    # Expand Tab / Button
-    exp_hov = exp_tab.collidepoint(mpos)
-    pygame.draw.rect(surface, (30, 50, 85) if exp_hov else (16, 26, 46), exp_tab, border_radius=4)
-    pygame.draw.rect(surface, (0, 240, 220) if exp_hov else (50, 75, 120), exp_tab, 1, border_radius=4)
-    e_lbl = tab_font.render("EXP", True, (0, 240, 220) if exp_hov else (170, 200, 235))
-    surface.blit(e_lbl, e_lbl.get_rect(center=exp_tab.center))
+    # Inactive/active EXP button
+    exp_hov = exp_btn.collidepoint(mpos)
+    pygame.draw.rect(surface, (30, 56, 90) if exp_hov else (16, 28, 48), exp_btn, border_radius=4)
+    pygame.draw.rect(surface, (0, 255, 230) if exp_hov else (50, 80, 130), exp_btn, 1, border_radius=4)
+    e_lbl = tab_font.render("EXP", True, (0, 255, 230) if exp_hov else (170, 210, 245))
+    surface.blit(e_lbl, e_lbl.get_rect(center=exp_btn.center))
 
     # Inner display viewport
     inner_x = panel_rect.x + 8
@@ -1404,9 +1393,9 @@ def draw_live_terminal_panel(surface, t, dt=16.0):
                 TERMINAL_LOG_CACHE["lines"] = raw_lines[-60:]
             display_lines = TERMINAL_LOG_CACHE.get("lines", [])
         except Exception:
-            display_lines = LIVE_TERMINAL_DATA.get("last_lines", [])
+            display_lines = LIVE_TERMINAL_DATA.get("lines", []) or LIVE_TERMINAL_DATA.get("last_lines", [])
     else:
-        display_lines = LIVE_TERMINAL_DATA.get("last_lines", [])
+        display_lines = LIVE_TERMINAL_DATA.get("lines", []) or LIVE_TERMINAL_DATA.get("last_lines", [])
 
     if not display_lines:
         display_lines = [
@@ -1463,6 +1452,14 @@ def draw_live_terminal_panel(surface, t, dt=16.0):
         surface.blit(cur_surf, (inner_x + 8, min(y_pos, inner_rect.bottom - 14)))
 
     surface.set_clip(clip_prev)
+
+    # Scroll hint banner if user scrolled back
+    if TERMINAL_SCROLL_OFFSET > 0:
+        hint_surf = meta_font.render(f"▲ SCROLLED (+{TERMINAL_SCROLL_OFFSET}) | CLICK CLR TO RESUME", True, (255, 210, 80))
+        hint_bg = pygame.Rect(inner_x + 4, inner_rect.bottom - 16, hint_surf.get_width() + 8, 14)
+        pygame.draw.rect(surface, (16, 26, 42), hint_bg, border_radius=3)
+        pygame.draw.rect(surface, (255, 210, 80), hint_bg, 1, border_radius=3)
+        surface.blit(hint_surf, (inner_x + 8, inner_rect.bottom - 15))
 
 
 def draw_expanded_live_terminal_modal(surface, t, dt=16.0):
@@ -1677,61 +1674,9 @@ def load_memory_snapshot():
     return snapshot
 
 
-def draw_memory_panel(surface):
-    panel_rect = LAYOUT["mem_panel"]
-    draw_glass_panel(surface, panel_rect, "NEURAL MEMORY MATRIX", (140, 230, 150))
-
-    snapshot = load_memory_snapshot()
-    user_memory = snapshot.get("user", {})
-    conversation = snapshot.get("conversation", {})
-    preferences = user_memory.get("preferences", {})
-    facts = user_memory.get("user_facts", {})
-    activity = user_memory.get("activity_log", [])
-    recent = conversation.get("recent_messages", [])
-
-    font_main = pygame.font.SysFont("consolas", 11, bold=True)
-    font_sub = pygame.font.SysFont("consolas", 10)
-    font_tiny = pygame.font.SysFont("consolas", 9)
-
-    name = facts.get("name") or "User"
-    preference_count = len([v for v in preferences.values() if v])
-    fact_count = len([v for v in facts.values() if v])
-    memory_score = min(100, preference_count * 12 + fact_count * 14 + min(len(activity), 10) * 2)
-
-    px = panel_rect.x + 12
-    py = panel_rect.y + 32
-
-    # Identity pill
-    id_text = font_main.render(f"PROFILE: {name.upper()}", True, (220, 245, 220))
-    surface.blit(id_text, (px, py))
-
-    stat_text = font_sub.render(f"{len(activity)} activities  |  {len(recent)} recent turns", True, (140, 180, 160))
-    surface.blit(stat_text, (px, py + 18))
-
-    # Retention Gauge Bar
-    bar_y = py + 38
-    bar_w = panel_rect.width - 24
-    bar_h = 7
-    bar_rect = pygame.Rect(px, bar_y, bar_w, bar_h)
-    pygame.draw.rect(surface, (20, 36, 50), bar_rect, border_radius=3)
-
-    fill_w = int(bar_w * (memory_score / 100.0))
-    if fill_w > 0:
-        fill_rect = pygame.Rect(px, bar_y, fill_w, bar_h)
-        pygame.draw.rect(surface, (120, 230, 150), fill_rect, border_radius=3)
-
-    gauge_lbl = font_tiny.render(f"RETENTION INDEX: {memory_score:02d}%", True, (140, 220, 165))
-    surface.blit(gauge_lbl, (px, bar_y + 11))
-
-    # Latest memory snippet
-    latest = recent[-1] if recent else {}
-    latest_text = latest.get("content", "Memory core initialized and receptive.").replace("\n", " ")
-    max_char = int(panel_rect.width / 8.5)
-    latest_text = latest_text[:max_char] + ("..." if len(latest_text) > max_char else "")
-
-    trace_y = bar_y + 28
-    surface.blit(font_tiny.render("LATEST CONTEXT TRACE:", True, (110, 160, 205)), (px, trace_y))
-    surface.blit(font_sub.render(latest_text, True, (205, 225, 245)), (px, trace_y + 14))
+def draw_memory_panel(surface, t=0.0, dt=16.0):
+    """Neural Memory Matrix has been replaced with the Live Terminal View in the primary HUD right column."""
+    draw_live_terminal_panel(surface, t, dt)
 
 
 # -------------------- HARDWARE PERFORMANCE MODULE --------------------
@@ -2371,7 +2316,7 @@ def main():
                         continue
 
                     # If expanded terminal modal is open, handle modal interactions
-                    if OPTICS_EXPAND_TERMINAL and OPTICS_SHOW_LIVE_TERMINAL:
+                    if OPTICS_EXPAND_TERMINAL:
                         close_btn = get_terminal_modal_close_rect()
                         modal_w = min(1200, WIDTH - 80)
                         modal_h = min(760, HEIGHT - 90)
@@ -2390,10 +2335,8 @@ def main():
                         MIC_MUTED = not MIC_MUTED
                     elif ctrl_rects["CAM"].collidepoint(mpos):
                         CAMERA_ENABLED = not CAMERA_ENABLED
-                        if CAMERA_ENABLED:
-                            set_optics_live_terminal(False)
                     elif "TERM" in ctrl_rects and ctrl_rects["TERM"].collidepoint(mpos):
-                        toggle_optics_live_terminal()
+                        toggle_optics_expanded_terminal()
                     elif "3D" in ctrl_rects and ctrl_rects["3D"].collidepoint(mpos):
                         toggle_optics_view_mode()
                     elif ctrl_rects["BOLD"].collidepoint(mpos):
@@ -2401,16 +2344,23 @@ def main():
                     elif ctrl_rects["CLR"].collidepoint(mpos):
                         clear_chat_history()
 
-                    # 1b. Optics CAM vs TERM vs EXP tabs
-                    cam_tab, term_tab, exp_tab = get_optics_tab_rects()
-                    if cam_tab.collidepoint(mpos):
-                        set_optics_live_terminal(False)
-                    elif term_tab.collidepoint(mpos):
-                        set_optics_live_terminal(True)
-                    elif exp_tab.collidepoint(mpos):
-                        if not OPTICS_SHOW_LIVE_TERMINAL:
-                            set_optics_live_terminal(True)
+                    # 1b. Camera panel toggle click
+                    cam_panel_rect = LAYOUT.get("cam_panel")
+                    if cam_panel_rect:
+                        cam_pill = pygame.Rect(cam_panel_rect.right - 56, cam_panel_rect.y + 6, 48, 18)
+                        if cam_pill.collidepoint(mpos):
+                            CAMERA_ENABLED = not CAMERA_ENABLED
+
+                    # 1c. Live Terminal panel controls (EXP, CLR)
+                    exp_btn, clr_btn = get_terminal_panel_button_rects()
+                    term_panel_rect = LAYOUT.get("term_panel", LAYOUT.get("mem_panel"))
+                    if exp_btn.collidepoint(mpos):
                         toggle_optics_expanded_terminal()
+                    elif clr_btn.collidepoint(mpos):
+                        TERMINAL_SCROLL_OFFSET = 0
+                    elif term_panel_rect and term_panel_rect.collidepoint(mpos):
+                        if TERMINAL_SCROLL_OFFSET > 0:
+                            TERMINAL_SCROLL_OFFSET = 0
 
                     # 2. Quick Action Chips
                     for qrect, (_, akey, ptext, _) in zip(get_quick_action_rects(), QUICK_ACTIONS):
@@ -2429,7 +2379,7 @@ def main():
                             INPUT_ACTIVE = True
 
                 elif event.type == pygame.MOUSEWHEEL:
-                    if OPTICS_EXPAND_TERMINAL and OPTICS_SHOW_LIVE_TERMINAL:
+                    if OPTICS_EXPAND_TERMINAL:
                         TERMINAL_SCROLL_OFFSET -= event.y * 3
                         TERMINAL_SCROLL_OFFSET = max(0, TERMINAL_SCROLL_OFFSET)
                         continue
@@ -2438,7 +2388,8 @@ def main():
                         if LAYOUT["chat_panel"].collidepoint(mx, my):
                             CHAT_SCROLL_OFFSET -= event.y * 24
                             CHAT_SCROLL_OFFSET = max(0, CHAT_SCROLL_OFFSET)
-                        elif OPTICS_SHOW_LIVE_TERMINAL and LAYOUT["cam_panel"].collidepoint(mx, my):
+                        elif (LAYOUT.get("term_panel") and LAYOUT["term_panel"].collidepoint(mx, my)) or \
+                             (LAYOUT.get("mem_panel") and LAYOUT["mem_panel"].collidepoint(mx, my)):
                             TERMINAL_SCROLL_OFFSET -= event.y * 2
                             TERMINAL_SCROLL_OFFSET = max(0, TERMINAL_SCROLL_OFFSET)
 
@@ -2549,9 +2500,9 @@ def main():
                 draw_quick_actions(screen)
                 draw_input_box(screen)
 
-                # Right Column (Vision, Memory, Performance)
+                # Right Column (Vision Scanner, Live Terminal, Performance)
                 draw_camera_panel(screen, t, dt)
-                draw_memory_panel(screen)
+                draw_live_terminal_panel(screen, t, dt)
                 draw_performance_panel(screen)
 
                 # Top Header & Bottom Status Bar
@@ -2560,7 +2511,7 @@ def main():
                 draw_status_bar(screen, fps)
 
                 # Expanded Live Terminal Modal overlay
-                if OPTICS_EXPAND_TERMINAL and OPTICS_SHOW_LIVE_TERMINAL:
+                if OPTICS_EXPAND_TERMINAL:
                     draw_expanded_live_terminal_modal(screen, t, dt)
 
             pygame.display.flip()

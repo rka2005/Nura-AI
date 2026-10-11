@@ -358,7 +358,7 @@ flowchart TB
 | **Tactical Command Chips** | One-click action prompts | Instant action chips for `[JOKE]`, `[WEATHER]`, `[MEMORY]`, `[MUSIC]`, `[FILES]`, and `[TASKMGR]`. |
 | **Quantum Reactor Core** | Audio-reactive visualizer | 3D mathematical dot sphere, rotating hexagon processor, cyan gap arcs, sweeping lasers, and radial reaction rays. |
 | **Neura Optics (Camera & 3D Agent Office)** | Dynamic dual-mode viewport (Live Scanner ⇄ 3D Agent Facility) | Live camera feed with biometric face tracking, or full 3D isometric Agent Office featuring Central Hall, 4 department rooms (QA Lab, Vision Lab, Ops Center, Tool Bay), animated agent navigation along power conduits (`IDLE` $\leftrightarrow$ `BUSY`), work particle FX, `[DEMO]` toggle, and 1-click view switching. |
-| **Neural Memory Matrix** | Cognitive profile telemetry | User identity tag, biometric authentication status, activity logs, recent context snippet, and an animated gradient **Retention Index gauge**. |
+| **Live Terminal View** | Real-time execution console & telemetry | Streaming command execution output, compute hardware acceleration telemetry (dedicated GPU / CUDA), live test milestones, syntax highlighting, and expandable full-screen cyber modal (`[EXP]`). |
 | **Hardware Telemetry** | Task manager style live monitor | Cyber grid with neon green (CPU), purple (RAM), and amber (GPU/VRAM) real-time wave graphs. |
 
 ---

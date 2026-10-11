@@ -1180,11 +1180,13 @@ def execute_agent_intent(intent, metadata, raw_query: str = ""):
 
     elif intent == IntentType.AGENT_TERMINAL_VIEW_SHOW:
         set_status_bridge_field("show_live_terminal", True)
-        return True, "Opening the live terminal testing view in Neura Optics, Sir."
+        set_status_bridge_field("expand_live_terminal", True)
+        return True, "Expanding the live terminal testing view on your HUD, Sir."
 
     elif intent == IntentType.AGENT_TERMINAL_VIEW_CLOSE:
         set_status_bridge_field("show_live_terminal", False)
-        return True, "Closing the live terminal view and returning to camera scanner, Sir."
+        set_status_bridge_field("expand_live_terminal", False)
+        return True, "Collapsing the expanded terminal view back to your HUD terminal panel, Sir."
 
     elif intent == IntentType.AGENT_COMPUTER_USE:
         goal = metadata.get("goal") or raw_query
