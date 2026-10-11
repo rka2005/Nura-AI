@@ -704,12 +704,16 @@ def execute_alert_intent(intent, metadata, raw_query: str = ""):
         return True, "Alarm has been silenced, Sir."
 
     if intent == getattr(IntentType, "SYSTEM_ALERT_LIST", "SYSTEM_ALERT_LIST"):
+        card = service.format_active_alerts_card()
+        send_to_frontend("neura", card)
         summary = service.format_active_alerts_summary()
         return True, summary
 
     if intent == getattr(IntentType, "SYSTEM_ALERT_CANCEL", "SYSTEM_ALERT_CANCEL"):
         target_label = metadata.get("label", "all")
         count, msg = service.cancel_alerts(target_label)
+        card = f"⏰ **Alert Cancellation**\n\n• **Result**: {msg}\n• **Active Alerts**: {len(service.list_active_alerts())} remaining"
+        send_to_frontend("neura", card)
         return True, msg
 
     # SYSTEM_ALERT_SET or SYSTEM_REMINDER
@@ -720,7 +724,7 @@ def execute_alert_intent(intent, metadata, raw_query: str = ""):
         explanation = metadata.get("explanation", "")
         trigger_speech = metadata.get("trigger_speech")
 
-        service.schedule_alert(
+        alert_rec = service.schedule_alert(
             label=label,
             delay_seconds=delay,
             target_time=target_dt,
@@ -741,14 +745,27 @@ def execute_alert_intent(intent, metadata, raw_query: str = ""):
             resp = f"Sure Sir! I am setting an alert for {format_duration_friendly(delay)} from now for your {clean_lbl.lower()}. I will remind you when it's time."
         else:
             resp = f"Sure Sir! I am setting an alert for {format_duration_friendly(delay)} from now. I will notify you when it's time."
+        
+        card = (
+            f"⏰ **Alert Scheduled Successfully**\n\n"
+            f"• **Reminder For**: {clean_lbl}\n"
+            f"• **Scheduled For**: {alert_rec.get('target_time_str')}\n"
+            f"• **Time Remaining**: {format_duration_friendly(delay)}\n"
+            f"• **Alert Mode**: Voice notification & audible chime"
+        )
+        send_to_frontend("neura", card)
         return True, resp
     else:
         # Fallback parsing in case metadata was empty or came from generic SYSTEM_REMINDER
         data = parse_alert_request(raw_query)
         if data.get("action") == "list":
+            card = service.format_active_alerts_card()
+            send_to_frontend("neura", card)
             return True, service.format_active_alerts_summary()
         elif data.get("action") == "cancel":
             count, msg = service.cancel_alerts(data.get("label", "all"))
+            card = f"⏰ **Alert Cancellation**\n\n• **Result**: {msg}\n• **Active Alerts**: {len(service.list_active_alerts())} remaining"
+            send_to_frontend("neura", card)
             return True, msg
         elif data.get("action") == "stop":
             service.stop_ringing()
@@ -760,7 +777,7 @@ def execute_alert_intent(intent, metadata, raw_query: str = ""):
             explanation = data.get("explanation", "")
             trigger_speech = data.get("trigger_speech")
 
-            service.schedule_alert(
+            alert_rec = service.schedule_alert(
                 label=label,
                 delay_seconds=delay,
                 target_time=target_dt,
@@ -780,7 +797,19 @@ def execute_alert_intent(intent, metadata, raw_query: str = ""):
                 resp = f"Sure Sir! I am setting an alert for {format_duration_friendly(delay)} from now for your {clean_lbl.lower()}. I will remind you when it's time."
             else:
                 resp = f"Sure Sir! I am setting an alert for {format_duration_friendly(delay)} from now. I will notify you when it's time."
+            card = (
+                f"⏰ **Alert Scheduled Successfully**\n\n"
+                f"• **Reminder For**: {clean_lbl}\n"
+                f"• **Scheduled For**: {alert_rec.get('target_time_str')}\n"
+                f"• **Time Remaining**: {format_duration_friendly(delay)}\n"
+                f"• **Alert Mode**: Voice notification & audible chime"
+            )
+            send_to_frontend("neura", card)
             return True, resp
+        elif any(k in raw_query.lower() for k in ["status", "how", "what", "check", "list"]):
+            card = service.format_active_alerts_card()
+            send_to_frontend("neura", card)
+            return True, service.format_active_alerts_summary()
         elif data.get("error"):
             return True, f"Sir, I could not set that alert: {data['error']}"
         else:
@@ -2491,21 +2520,95 @@ def get_network_speed():
         return "I could not complete the Fast.com network speed test. Please check your internet connection."
 
 
-def get_system_condition():
-    """Return current CPU, memory, disk, and battery status."""
-    cpu_percent = psutil.cpu_percent(interval=0.5)
+def get_system_condition_and_card() -> Tuple[str, str]:
+    """
+    Collects real-time hardware telemetry: CPU, RAM, Disk, Battery, and GPU.
+    Returns (spoken_response: str, markdown_card: str).
+    """
+    cpu_percent = psutil.cpu_percent(interval=0.4)
+    cpu_count = psutil.cpu_count(logical=True)
     memory_info = psutil.virtual_memory()
     disk_info = psutil.disk_usage(os.path.abspath(os.sep))
-    details = [
-        f"CPU usage is {cpu_percent:.0f} percent",
-        f"RAM usage is {memory_info.percent:.0f} percent",
-        f"disk usage is {disk_info.percent:.0f} percent",
-    ]
+    
+    total_ram_gb = memory_info.total / (1024 ** 3)
+    used_ram_gb = memory_info.used / (1024 ** 3)
+    free_ram_gb = memory_info.available / (1024 ** 3)
+    
+    total_disk_gb = disk_info.total / (1024 ** 3)
+    used_disk_gb = disk_info.used / (1024 ** 3)
+    free_disk_gb = disk_info.free / (1024 ** 3)
+
     battery = psutil.sensors_battery()
+    bat_desc = "AC Power Connected (No battery)"
+    bat_speech = ""
     if battery is not None:
         charging = "and charging" if battery.power_plugged else "and not charging"
-        details.append(f"battery is at {battery.percent:.0f} percent {charging}")
-    return "System condition: " + ", ".join(details) + "."
+        bat_desc = f"{battery.percent:.0f}% ({'Charging ⚡' if battery.power_plugged else 'On Battery 🔋'})"
+        bat_speech = f", battery is at {battery.percent:.0f} percent {charging}"
+
+    # Discovered compute devices / GPUs
+    gpu_names = []
+    try:
+        from brain.hardware_manager import get_hardware_gpus
+        gpus = get_hardware_gpus()
+        for g in gpus:
+            g_tag = "Dedicated" if g.get("is_dedicated") else "System"
+            gpu_names.append(f"{g.get('name')} [{g_tag}]")
+    except Exception:
+        pass
+    gpu_desc = ", ".join(gpu_names) if gpu_names else "Standard Display Adapter"
+
+    # Health status verdict
+    if cpu_percent < 75 and memory_info.percent < 85:
+        health_status = "Optimal Condition (Normal Load) ✅"
+        health_speech = "System condition is optimal."
+    elif cpu_percent < 90 and memory_info.percent < 92:
+        health_status = "Stable Condition (Moderate Load) ⚡"
+        health_speech = "System condition is stable under moderate load."
+    else:
+        health_status = "High Load Condition ⚠️"
+        health_speech = "System is operating under heavy workload."
+
+    # Spoken verbal response
+    speech = (
+        f"{health_speech} CPU usage is {cpu_percent:.0f} percent across {cpu_count} cores, "
+        f"RAM usage is {memory_info.percent:.0f} percent with {free_ram_gb:.1f} GB free, "
+        f"disk usage is {disk_info.percent:.0f} percent with {free_disk_gb:.0f} GB free{bat_speech}."
+    )
+
+    card = (
+        f"🖥️ **System Condition & Hardware Performance Checkup**\n\n"
+        f"• **Overall Health**: {health_status}\n"
+        f"• **CPU**: {cpu_percent:.0f}% utilization across {cpu_count} logical cores\n"
+        f"• **RAM (Memory)**: {memory_info.percent:.0f}% used ({used_ram_gb:.1f} GB / {total_ram_gb:.1f} GB | Free: {free_ram_gb:.1f} GB)\n"
+        f"• **Disk (Storage)**: {disk_info.percent:.0f}% used ({used_disk_gb:.0f} GB / {total_disk_gb:.0f} GB | Free: {free_disk_gb:.0f} GB)\n"
+        f"• **Battery & Power**: {bat_desc}\n"
+        f"• **GPU Compute**: {gpu_desc}\n"
+        f"• **Alert Subsystem**: Active background monitoring ✅\n\n"
+        f"*{speech}*"
+    )
+
+    # Sync to status_bridge
+    try:
+        set_status_bridge_field("system_condition", {
+            "cpu_percent": cpu_percent,
+            "ram_percent": memory_info.percent,
+            "disk_percent": disk_info.percent,
+            "free_ram_gb": round(free_ram_gb, 1),
+            "free_disk_gb": round(free_disk_gb, 1),
+            "health_status": health_status,
+            "updated_at": time.time()
+        })
+    except Exception:
+        pass
+
+    return speech, card
+
+
+def get_system_condition():
+    """Return current CPU, memory, disk, and battery status as verbal speech."""
+    speech, _ = get_system_condition_and_card()
+    return speech
 
 
 def check_microphone_and_speaker_status() -> Tuple[bool, Dict[str, Any], str]:
@@ -2663,7 +2766,9 @@ def execute_system_diagnostic_intent(intent, metadata=None, raw_query: str = "")
     if intent == IntentType.SYSTEM_NETWORK_SPEED:
         return True, get_network_speed()
     if intent == IntentType.SYSTEM_CONDITION:
-        return True, get_system_condition()
+        speech, card = get_system_condition_and_card()
+        send_to_frontend("neura", card)
+        return True, speech
     if intent == IntentType.SYSTEM_BACKGROUND_STATUS:
         return True, desktop_ctrl.get_background_activity()
     if intent == IntentType.SYSTEM_SCREEN_AND_BACKGROUND_STATUS:

@@ -289,6 +289,69 @@ class TestAlertSystem(unittest.TestCase):
         self.assertEqual(spoken[-1], expected_text)
         print("\n[TEST 16 PASSED] Real trigger spoke context:\n", spoken[-1])
 
+    def test_17_alert_system_status_and_check_queries(self):
+        """
+        Verify that queries checking alert status or asking about active alerts
+        route to list/status and don't fail as broken set commands.
+        """
+        from brain.intent_router import route_intent, IntentType
+        check_queries = [
+            "check alerts",
+            "check alert",
+            "alert status",
+            "how is the alert system",
+            "any alerts",
+            "active alerts",
+            "pending alerts",
+            "is there any alert",
+            "are there any alerts"
+        ]
+        for q in check_queries:
+            intent, meta = route_intent(q)
+            self.assertEqual(intent, IntentType.SYSTEM_ALERT_LIST, f"Failed for query: {q}")
+            res = parse_alert_request(q)
+            self.assertEqual(res["action"], "list")
+            self.assertTrue(res["success"])
+        print("\n[TEST 17 PASSED] All 9 alert check/status queries cleanly route to SYSTEM_ALERT_LIST.")
+
+    def test_18_system_condition_and_checkup_routing(self):
+        """
+        Verify system condition, checkup, and performance queries route to SYSTEM_CONDITION
+        and are NOT hijacked by AGENT_PROJECT_TEST or CONVERSATION.
+        """
+        from brain.intent_router import route_intent, IntentType
+        condition_queries = [
+            "check system condition",
+            "system condition checkup",
+            "system checkup",
+            "checkup the system",
+            "how is the system condition",
+            "system performance",
+            "check system performance",
+            "system performance checkup",
+            "system health checkup",
+            "what is the condition of my system"
+        ]
+        for q in condition_queries:
+            intent, meta = route_intent(q)
+            self.assertEqual(intent, IntentType.SYSTEM_CONDITION, f"Failed for query: {q}")
+        print("\n[TEST 18 PASSED] All 10 system condition and checkup queries route to SYSTEM_CONDITION.")
+
+    def test_19_system_condition_telemetry_and_card_generation(self):
+        """
+        Verify that get_system_condition_and_card collects valid metrics,
+        detects CPU/RAM/Disk, and generates markdown card with optimal/stable health status.
+        """
+        import neura
+        speech, card = neura.get_system_condition_and_card()
+        self.assertIn("System condition", speech)
+        self.assertIn("CPU usage", speech)
+        self.assertIn("RAM usage", speech)
+        self.assertIn("System Condition & Hardware Performance Checkup", card)
+        self.assertIn("Overall Health", card)
+        self.assertIn("Alert Subsystem", card)
+        print("\n[TEST 19 PASSED] System condition telemetry and markdown card generated successfully.")
+
 
 if __name__ == "__main__":
     unittest.main()

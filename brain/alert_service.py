@@ -342,13 +342,27 @@ def parse_alert_request(query: str, base_dt: Optional[datetime.datetime] = None)
         result["success"] = True
         return result
 
-    # 3. List Active Alerts
+    # 3. List Active Alerts & Alert System Status Check
     if any(phrase in q_lower for phrase in [
         "list alarms", "list alerts", "list reminders", "show my alarms", "show alarms",
         "show my alerts", "show alerts", "what alarms are set", "what alerts are set",
-        "check my alarms", "check alarms", "check my alerts", "any alarms set", "do i have any alarms",
-        "what are my alarms", "what are my alerts", "tell me my alarms", "active alarms"
-    ]):
+        "check my alarms", "check alarms", "check my alerts", "check alerts", "check alert",
+        "check the alert", "check the alerts", "check all alerts", "check active alerts",
+        "any alarms set", "any alerts set", "any alarm set", "any alert set",
+        "do i have any alarms", "do i have any alerts", "do i have an alarm", "do i have an alert",
+        "do i have any alert", "is there any alert", "is there any alarm", "are there any alerts",
+        "are there any alarms", "what are my alarms", "what are my alerts", "tell me my alarms",
+        "tell me my alerts", "active alarms", "active alerts", "pending alerts", "pending alarms",
+        "view alerts", "view alarms", "view reminders", "alert status", "alerts status",
+        "alarm status", "alarms status", "timer status", "alert check", "alerts check",
+        "how is the alert system", "how is my alert system", "alert system status",
+        "check alert system", "check the alert system", "status of alerts", "status of alarms",
+        "any alerts", "any alarms"
+    ]) or (
+        ("alert" in q_lower or "alarm" in q_lower or "reminder" in q_lower)
+        and any(k in q_lower for k in ["status", "active", "pending", "list", "check"])
+        and not any(k in q_lower for k in ["set", "cancel", "stop", "delete", "remove", "clear"])
+    ):
         result["action"] = "list"
         result["success"] = True
         return result
@@ -834,6 +848,28 @@ class AlertService:
             t_str = a.get("target_time_str", "")
             rem_str = a.get("remaining_friendly", "")
             lines.append(f"{idx}. '{lbl}' scheduled for {t_str} (in {rem_str}).")
+        return "\n".join(lines)
+
+    def format_active_alerts_card(self) -> str:
+        """Returns Markdown formatted UI card for chat bridge and frontend HUD."""
+        active = self.list_active_alerts()
+        count = len(active)
+        lines = [
+            "⏰ **Neura Alert & Alarm Subsystem**\n",
+            f"• **Monitoring Daemon**: Active & Operational ✅",
+            f"• **Active Alerts Count**: {count} scheduled",
+        ]
+        if not active:
+            lines.append("• **Pending Items**: None (All timers clear)")
+            lines.append("\n*Sir, you currently have no active alerts or alarms set.*")
+        else:
+            lines.append("\n**Scheduled Alerts & Reminders:**")
+            for idx, a in enumerate(active, 1):
+                lbl = a.get("label", "Alarm")
+                t_str = a.get("target_time_str", "")
+                rem_str = a.get("remaining_friendly", "")
+                lines.append(f"{idx}. 🔔 **{lbl}** — {t_str} *(in {rem_str})*")
+            lines.append(f"\n*I will notify you with voice and sound alarm as each alert matures, Sir.*")
         return "\n".join(lines)
 
     def cancel_alerts(self, identifier: Optional[str] = None) -> Tuple[int, str]:

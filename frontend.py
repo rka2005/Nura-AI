@@ -1,5 +1,6 @@
 import pygame
 from office_view import OfficeView
+from neura_core import NeuraCore
 import random
 import math
 import pyaudio
@@ -356,7 +357,7 @@ def recalc_layout(width, height):
     CENTER_X = center_x + center_w // 2
     CENTER_Y = content_y + int(content_h * 0.44)
 
-    SPHERE_RADIUS_BASE = int(min(center_w, content_h) * 0.31)
+    SPHERE_RADIUS_BASE = int(min(center_w, content_h) * 0.285)
     SPHERE_RADIUS = SPHERE_RADIUS_BASE
     FOV = SPHERE_RADIUS_BASE * 2.3
 
@@ -366,64 +367,10 @@ def recalc_layout(width, height):
     LAYOUT["spectrum"] = pygame.Rect(CENTER_X - spectrum_w // 2, content_y + content_h - spectrum_h - 8, spectrum_w, spectrum_h)
 
 
-# -------------------- 3D AUDIO-REACTIVE SPHERE --------------------
-class Dot:
-    def __init__(self):
-        theta = random.uniform(0, 2 * math.pi)
-        phi = random.uniform(0, math.pi)
-        self.theta = theta
-        self.phi = phi
-        self.dtheta = random.uniform(-0.35, 0.35)
-        self.dphi = random.uniform(-0.2, 0.2)
-        self.x, self.y, self.z = 0, 0, 0
-
-    def update(self, dt, rot_x, rot_y):
-        self.theta += self.dtheta * dt * 0.001
-        self.phi += self.dphi * dt * 0.001
-
-        if self.phi < 0:
-            self.phi = -self.phi
-            self.dphi *= -1
-        elif self.phi > math.pi:
-            self.phi = 2 * math.pi - self.phi
-            self.dphi *= -1
-
-        x = SPHERE_RADIUS * math.sin(self.phi) * math.cos(self.theta)
-        y = SPHERE_RADIUS * math.cos(self.phi)
-        z = SPHERE_RADIUS * math.sin(self.phi) * math.sin(self.theta)
-
-        cos_y = math.cos(rot_y)
-        sin_y = math.sin(rot_y)
-        xz = x * cos_y + z * sin_y
-        zz = -x * sin_y + z * cos_y
-
-        cos_x = math.cos(rot_x)
-        sin_x = math.sin(rot_x)
-        yz = y * cos_x - zz * sin_x
-        zz2 = y * sin_x + zz * cos_x
-
-        self.x, self.y, self.z = xz, yz, zz2
-
-    def project(self):
-        z_cam = self.z + SPHERE_RADIUS * 2.2
-        if z_cam <= 1:
-            z_cam = 1
-        factor = FOV / z_cam
-
-        sx = int(CENTER_X + self.x * factor)
-        sy = int(CENTER_Y + self.y * factor)
-
-        depth = max(0.0, min(1.0, 1.0 - (z_cam / (SPHERE_RADIUS_BASE * 3.0))))
-        radius = max(1, int(1 + depth * 3))
-
-        theme = THEMES.get(current_theme, THEMES[1])
-        base_color = theme["sphere_dots"]
-        brightness = 0.45 + depth * 0.65
-        r = int(min(255, base_color[0] * brightness))
-        g = int(min(255, base_color[1] * brightness))
-        b = int(min(255, base_color[2] * brightness))
-
-        return sx, sy, radius, (r, g, b)
+# -------------------- NEURA CORE (voice-reactive sphere) --------------------
+# Rendering lives in neura_core.py. One instance for the main stage, one for the corner tile.
+NEURA_CORE = NeuraCore()
+NEURA_CORE_PIP = NeuraCore(seed=11, points=1400)
 
 
 # -------------------- MATH & COLOR HELPERS --------------------
@@ -1143,45 +1090,33 @@ def handle_workspace_popup_click(mpos):
     return False
 
 
-def draw_neura_sphere_pip(surface, dots_sorted, t, amplitude):
-    """Draw Neura's existing animated 3D sphere as a video-call-style overlay."""
-    pip = pygame.Rect(WIDTH - 218, 54, 190, 190)
+def draw_neura_sphere_pip(surface, t, amplitude):
+    """Neura core as a video-call-style tile (top-right) while the agent workspace is open."""
+    pip = pygame.Rect(WIDTH - 232, 54, 204, 214)
+    theme = THEMES.get(current_theme, THEMES[1])
     panel = pygame.Surface(pip.size, pygame.SRCALPHA)
-    panel.fill((5, 11, 25, 225))
-    pygame.draw.rect(panel, (0, 220, 255, 230), panel.get_rect(), 2, border_radius=16)
+    panel.fill((5, 10, 22, 232))
+    pygame.draw.rect(panel, (*theme["primary"], 210), panel.get_rect(), 2, border_radius=16)
     surface.blit(panel, pip.topleft)
 
-    cx, cy = pip.centerx, pip.y + 88
-    radius = 67
-    pygame.draw.circle(surface, (20, 90, 130), (cx, cy), radius + 7, 1)
-    pygame.draw.circle(surface, (0, 210, 255), (cx, cy), radius, 1)
-    pygame.draw.circle(surface, (20, 75, 115), (cx, cy), int(radius * 0.68), 1)
+    prev = surface.get_clip()
+    surface.set_clip(pip.inflate(-6, -6))
+    NEURA_CORE_PIP.draw(surface, pip.centerx, pip.y + 98, 58, t, amplitude, theme, current_theme,
+                        ASSISTANT_STATUS, COLOR_BG)
+    surface.set_clip(prev)
 
-    # Dot.project() uses the main HUD's centre; remap those coordinates into the PiP.
-    scale = 0.52
-    for dot in dots_sorted:
-        sx, sy, dot_radius, color = dot.project()
-        px = int(cx + (sx - CENTER_X) * scale)
-        py = int(cy + (sy - CENTER_Y) * scale)
-        if (px - cx) ** 2 + (py - cy) ** 2 <= (radius - 3) ** 2:
-            pygame.draw.circle(surface, color, (px, py), max(1, dot_radius))
-
-    theme = THEMES.get(current_theme, THEMES[1])
-    pulse = 1.0 + 0.06 * math.sin(t * 0.006) + min(0.12, amplitude * 0.12)
-    pygame.draw.circle(surface, theme["primary"], (cx, cy), int(15 * pulse), 2)
-    pygame.draw.circle(surface, theme["quiet_core"], (cx, cy), int(7 * pulse), 1)
-    label = pygame.font.SysFont("consolas", 10, bold=True).render("NEURA // LIVE", True, (170, 235, 255))
-    surface.blit(label, label.get_rect(center=(cx, pip.bottom - 17)))
+    label = pygame.font.SysFont("consolas", 10, bold=True).render("NEURA // LIVE", True, theme["primary"])
+    surface.blit(label, label.get_rect(center=(pip.centerx, pip.bottom - 14)))
 
 
-def draw_agent_workspace_popup(surface, t, dt, dots_sorted, amplitude):
+def draw_agent_workspace_popup(surface, t, dt, amplitude):
     """Full-window agent workspace with Neura retained as a floating PiP."""
     surface.fill((5, 8, 18))
     workspace_rect = pygame.Rect(18, 18, WIDTH - 36, HEIGHT - 36)
     AGENT_OFFICE_INSTANCE.draw(surface, workspace_rect, t, dt)
 
     # Keep the existing Neura sphere visible in the top-right, like a video-call tile.
-    draw_neura_sphere_pip(surface, dots_sorted, t, amplitude)
+    draw_neura_sphere_pip(surface, t, amplitude)
 
     close_rect = get_workspace_close_rect()
     hovered = close_rect.collidepoint(pygame.mouse.get_pos())
@@ -1818,103 +1753,12 @@ def draw_audio_spectrum(surface, amplitude):
 
 # -------------------- ADVANCED JARVIS HUD CORE --------------------
 def draw_sidd_hud(surface, t, amplitude):
-    global ULTRA_BOLD, VOICE_PULSES
-
-    center = (CENTER_X, CENTER_Y)
-    ts = t * 0.001
-    base = int(min(WIDTH, HEIGHT) * 0.11)
-    amp = min(max(amplitude, 0.0), 1.0)
-    amp_visual = amp ** 0.7
-
-    CYAN = (0, 220, 255)
-    CYAN_SOFT = (0, 160, 210)
-
-    outer_w = 4 if ULTRA_BOLD else 2
-    inner_w = 3 if ULTRA_BOLD else 1
-    core_w = 5 if ULTRA_BOLD else 2
-
-    r_inner = int(base * 0.85)
-    r_outer = int(base * 1.35)
-    r_glow = int(base * 1.55)
-
-    pygame.draw.circle(surface, CYAN_SOFT, center, r_glow, 1)
-    pygame.draw.circle(surface, CYAN, center, r_outer, outer_w)
-    pygame.draw.circle(surface, CYAN, center, r_inner, inner_w)
-
-    # Rotating cyber gap arcs
-    gap_rect = pygame.Rect(0, 0, r_outer * 2, r_outer * 2)
-    gap_rect.center = center
-    for i in range(3):
-        offset = ts * 0.6 + i * (2 * math.pi / 3)
-        pygame.draw.arc(surface, CYAN_SOFT, gap_rect, offset, offset + math.pi / 7, outer_w)
-
-    # Dynamic Theme Colors
+    """Centre-stage Neura core (see neura_core.py). Reacts to the mic and to Neura speaking."""
+    global VOICE_PULSES
+    VOICE_PULSES = [p for p in VOICE_PULSES if 0 <= t - p <= VOICE_PULSE_LIFE]
     theme = THEMES.get(current_theme, THEMES[1])
-    inner_color = mix_color(theme["quiet_core"], theme["loud_core"], amp_visual)
-
-    # Pulsing core
-    core_radius = int(base * (0.42 + 0.28 * amp_visual))
-    pygame.draw.circle(surface, inner_color, center, core_radius, core_w)
-
-    # Rotating processor polygon
-    sides = 6
-    poly_radius = int(core_radius * 0.75)
-    poly_ang = ts * 1.2
-    pts = [
-        (CENTER_X + poly_radius * math.cos(poly_ang + 2 * math.pi * i / sides),
-         CENTER_Y + poly_radius * math.sin(poly_ang + 2 * math.pi * i / sides))
-        for i in range(sides)
-    ]
-    pygame.draw.polygon(surface, inner_color, pts, 2)
-
-    # Inner Ticks
-    tick_count = 20
-    tick_rot = ts * 0.5
-    for i in range(tick_count):
-        ang = tick_rot + (2 * math.pi * i / tick_count)
-        x0 = CENTER_X + (r_inner * 0.94) * math.cos(ang)
-        y0 = CENTER_Y + (r_inner * 0.94) * math.sin(ang)
-        x1 = CENTER_X + (r_inner * 1.02) * math.cos(ang)
-        y1 = CENTER_Y + (r_inner * 1.02) * math.sin(ang)
-        pygame.draw.line(surface, CYAN_SOFT, (x0, y0), (x1, y1), 1)
-
-    # Reactive radial scanning lines
-    num_lines = 16
-    l_rot = ts * 1.6
-    for i in range(num_lines):
-        ang = l_rot + (2 * math.pi * i / num_lines)
-        r0 = core_radius * 1.05
-        r1 = r_inner * (0.90 + 0.18 * amp_visual)
-        x0 = CENTER_X + r0 * math.cos(ang)
-        y0 = CENTER_Y + r0 * math.sin(ang)
-        x1 = CENTER_X + r1 * math.cos(ang)
-        y1 = CENTER_Y + r1 * math.sin(ang)
-        pygame.draw.line(surface, inner_color, (x0, y0), (x1, y1), 1)
-
-    # Sweeping radar laser
-    sweep_r = r_outer * 1.02
-    sw_rect = pygame.Rect(0, 0, sweep_r * 2, sweep_r * 2)
-    sw_rect.center = center
-    sw_ang = ts * 1.4
-    pygame.draw.arc(surface, (255, 255, 255), sw_rect, sw_ang, sw_ang + math.pi / 18, 3)
-
-    # Orbiting satellite energy orb
-    orb_ang = ts * 2.2
-    ox = CENTER_X + (r_inner * 1.1) * math.cos(orb_ang)
-    oy = CENTER_Y + (r_inner * 1.1) * math.sin(orb_ang)
-    pygame.draw.circle(surface, mix_color(inner_color, (255, 255, 255), 0.6), (int(ox), int(oy)), 5)
-
-    # Speaking expanding rings
-    alive = []
-    for start_t in VOICE_PULSES:
-        age = t - start_t
-        if 0 <= age <= VOICE_PULSE_LIFE:
-            alive.append(start_t)
-            p = age / VOICE_PULSE_LIFE
-            pr = core_radius * 1.1 + p * (r_outer * 0.95 - core_radius * 1.1)
-            pc = mix_color(inner_color, CYAN_SOFT, p)
-            pygame.draw.circle(surface, pc, center, int(pr), 2)
-    VOICE_PULSES = alive
+    NEURA_CORE.draw(surface, CENTER_X, CENTER_Y, SPHERE_RADIUS_BASE, t, amplitude, theme,
+                    current_theme, ASSISTANT_STATUS, COLOR_BG)
 
 
 # -------------------- BOTTOM STATUS BAR --------------------
@@ -1971,7 +1815,6 @@ def main():
     pygame.display.set_caption("NEURA AI // QUANTUM DESKTOP INTERFACE")
 
     clock = pygame.time.Clock()
-    dots = [Dot() for _ in range(NUM_DOTS)]
 
     # Audio Setup with PyAudio
     pa = None
@@ -2010,8 +1853,6 @@ def main():
     except Exception as e:
         print("[Neura Frontend] Vision init error:", e)
 
-    rot_x = 0.0
-    rot_y = 0.0
     t = 0.0
     running = True
 
@@ -2453,43 +2294,16 @@ def main():
                 VOICE_PULSES.append(t)
             last_amplitude = amplitude
 
-            # Rotate 3D Sphere
-            rot_y += ROT_Y_SPEED * dt * 0.001
-            rot_x += ROT_X_SPEED * dt * 0.001
-
-            for d in dots:
-                d.update(dt, rot_x, rot_y)
-
-            dots_sorted = sorted(dots, key=lambda d: d.z)
-
             # Synchronize Chat Messages from Bridge
             fetch_chat_from_backend()
 
             # Render UI: workspace mode hides the full HUD and uses a floating Neura sphere.
             if OPTICS_SHOW_3D_OFFICE:
-                draw_agent_workspace_popup(screen, t, dt, dots_sorted, amplitude)
+                draw_agent_workspace_popup(screen, t, dt, amplitude)
             else:
                 screen.fill(COLOR_BG)
 
-                # Central Atmospheric Radial Glow
-                theme = THEMES.get(current_theme, THEMES[1])
-                glow_surf = pygame.Surface((SPHERE_RADIUS_BASE * 3, SPHERE_RADIUS_BASE * 3), pygame.SRCALPHA)
-                pygame.draw.circle(
-                    glow_surf,
-                    (*theme["primary_soft"], 18),
-                    (SPHERE_RADIUS_BASE * 3 // 2, SPHERE_RADIUS_BASE * 3 // 2),
-                    int(SPHERE_RADIUS_BASE * 1.3)
-                )
-                screen.blit(glow_surf, (CENTER_X - SPHERE_RADIUS_BASE * 3 // 2, CENTER_Y - SPHERE_RADIUS_BASE * 3 // 2))
-
-                # Sphere outline & dots
-                pygame.draw.circle(screen, (15, 25, 48), (CENTER_X, CENTER_Y), int(SPHERE_RADIUS * 0.92), 1)
-                for d in dots_sorted:
-                    sx, sy, radius, color = d.project()
-                    if 0 <= sx < WIDTH and 0 <= sy < HEIGHT:
-                        pygame.draw.circle(screen, color, (sx, sy), radius)
-
-                # Jarvis HUD Core (Center)
+                # Neura Core (Center)
                 draw_sidd_hud(screen, t, amplitude)
 
                 # Multi-Band Audio Spectrum

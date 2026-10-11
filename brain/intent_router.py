@@ -310,7 +310,11 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
             'test the codebase', 'test codebase', 'test code', 'run unit tests', 'run the tests',
             'test the app', 'test application', 'test system', 'test neura'
         ])
-    ) and not any(k in q for k in ['internet', 'speed', 'voice', 'microphone', 'mic'])
+    ) and not any(k in q for k in [
+        'internet', 'speed', 'voice', 'microphone', 'mic',
+        'condition', 'health', 'checkup', 'status', 'hardware',
+        'battery', 'ram', 'cpu', 'specs', 'performance', 'diagnostic'
+    ])
 
     if is_project_test:
         proj_meta = {}
@@ -514,15 +518,27 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
     ]):
         return IntentType.SYSTEM_NETWORK_SPEED, {}
 
+    # System Condition & Performance Checkup
     if any(phrase in q for phrase in [
         'system condition', 'system status', 'computer condition',
         'computer status', 'pc condition', 'pc status', 'system health',
         'cpu usage', 'ram usage', 'memory usage', 'disk usage',
         'how is my system', 'how is my computer',
-    ]):
-        return IntentType.SYSTEM_CONDITION, {}
-    if any(term in q for term in ['cpu', 'ram', 'processor']) and any(
-        term in q for term in ['usage', 'status', 'condition', 'health', 'how', 'check', 'tell']
+        'system checkup', 'checkup system', 'system condition checkup',
+        'checkup the system', 'checkup on the system', 'check system condition',
+        'check the system condition', 'check my system condition', 'pc checkup',
+        'computer checkup', 'system health checkup', 'check system health',
+        'system performance', 'check system performance', 'system performance checkup',
+        'run system checkup', 'perform system checkup', 'do a system checkup',
+        'how is the system condition', 'what is the condition of my system',
+        'what is my system condition', 'condition of my system', 'condition of the system',
+        'hardware status', 'hardware condition', 'system diagnostic', 'diagnose system',
+    ]) or (
+        any(k in q for k in ['system', 'pc', 'computer', 'laptop'])
+        and any(c in q for c in ['condition', 'checkup', 'performance', 'health'])
+    ) or (
+        any(term in q for term in ['cpu', 'ram', 'processor', 'battery', 'disk', 'gpu'])
+        and any(term in q for term in ['usage', 'status', 'condition', 'health', 'how', 'check', 'tell', 'checkup', 'performance'])
     ):
         return IntentType.SYSTEM_CONDITION, {}
 
@@ -955,15 +971,20 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
         from brain.alert_service import parse_alert_request
         alert_data = parse_alert_request(query)
         action = alert_data.get("action")
-        if action == "set":
-            return IntentType.SYSTEM_ALERT_SET, alert_data
-        elif action == "list":
+        if action == "list":
             return IntentType.SYSTEM_ALERT_LIST, alert_data
         elif action == "cancel":
             return IntentType.SYSTEM_ALERT_CANCEL, alert_data
         elif action == "stop":
             return IntentType.SYSTEM_ALERT_STOP, alert_data
-        elif any(r in q for r in ['set a reminder', 'set reminder', 'remind me', 'add reminder', 'set alert', 'set alarm', 'give me alert']):
+        elif action == "set" and alert_data.get("success"):
+            return IntentType.SYSTEM_ALERT_SET, alert_data
+        elif any(r in q for r in [
+            'set a reminder', 'set reminder', 'remind me', 'add reminder', 'set alert',
+            'set an alert', 'set alarm', 'set an alarm', 'give me alert', 'give me an alert',
+            'wake me up', 'notify me in', 'alert me in', 'alert me after', 'remind me after',
+            'remind me in', 'set timer', 'start timer'
+        ]):
             return IntentType.SYSTEM_ALERT_SET, alert_data
 
     # Media controls
