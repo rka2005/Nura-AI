@@ -75,8 +75,11 @@ memory = memory_mgr.user_memory  # Reference for backward compatibility
 # Desktop Automation & File CRUD Controllers
 SCREEN_ACCESS_ALLOWED = memory_mgr.get_preference("screen_access_allowed", True)
 BACKGROUND_WORK_ALLOWED = memory_mgr.get_preference("background_work_allowed", True)
+EMAIL_MESSAGING_ALLOWED = memory_mgr.get_preference("email_messaging_allowed", True)
 desktop_ctrl = DesktopController()
 file_mgr = FileManager()
+from brain.communication_controller import get_communication_controller
+comm_ctrl = get_communication_controller()
 
 # Multi-Agent Subsystem Orchestrator
 from brain.agents import get_orchestrator, Task, TaskState, PermissionLevel
@@ -428,18 +431,73 @@ def safe_search_lookup(search_query):
         speak(msg)
         return msg
 
+def execute_communication_intent(intent, metadata=None, raw_query: str = "") -> Tuple[bool, str]:
+    """
+    Executes structured email and WhatsApp Web messaging actions deterministically.
+    Returns (handled: bool, response_message: str).
+    """
+    metadata = metadata or {}
+    comm_controller = get_communication_controller()
+
+    if intent == IntentType.COMMUNICATION_EMAIL:
+        recipient = metadata.get("recipient", "")
+        sender = metadata.get("sender")
+        subject = metadata.get("subject")
+        body = metadata.get("body", "")
+        if not recipient:
+            return True, "Who would you like to send the email to, Sir?"
+        handled, speech, meta = comm_controller.send_structured_email(
+            to_email=recipient,
+            subject=subject,
+            body=body,
+            from_email=sender
+        )
+        return handled, speech
+
+    elif intent == IntentType.COMMUNICATION_WHATSAPP:
+        recipient = metadata.get("recipient", "")
+        message = metadata.get("message", "")
+        if not recipient:
+            return True, "Who would you like to send the WhatsApp message to, and what should it say, Sir?"
+        handled, speech = comm_controller.send_whatsapp_message(
+            recipient=recipient,
+            message=message
+        )
+        return handled, speech
+
+    return False, ""
+
 def execute_desktop_or_file_intent(intent, metadata, raw_query: str = ""):
     """
     Executes screen, desktop, or file CRUD actions deterministically without API calls.
     Returns (handled: bool, response_message: str).
     """
-    global SCREEN_ACCESS_ALLOWED, BACKGROUND_WORK_ALLOWED
+    global SCREEN_ACCESS_ALLOWED, BACKGROUND_WORK_ALLOWED, EMAIL_MESSAGING_ALLOWED
 
     rq = raw_query.lower()
 
     # Handle explicit permission requests
     if intent == IntentType.SYSTEM_PERMISSION:
         action = metadata.get("action", "grant")
+        perm_type = metadata.get("permission_type")
+
+        # Specific Email & Messaging permission
+        if perm_type == "email_messaging" or any(p in rq for p in ["email", "message", "whatsapp"]):
+            if action == "revoke" or any(p in rq for p in ["stop", "disable", "revoke", "deny"]):
+                EMAIL_MESSAGING_ALLOWED = False
+                try:
+                    update_preference("email_messaging_allowed", False)
+                except Exception:
+                    pass
+                return True, "Permission to send emails and messages has been revoked, Sir."
+            else:
+                EMAIL_MESSAGING_ALLOWED = True
+                try:
+                    update_preference("email_messaging_allowed", True)
+                except Exception:
+                    pass
+                return True, "Permission to send emails and messages has been granted, Sir. I can now send structured emails and WhatsApp messages for you."
+
         if action == "revoke" or any(p in rq for p in ["stop screen access", "disable screen access", "revoke screen access", "revoke background", "disable background"]):
             SCREEN_ACCESS_ALLOWED = False
             BACKGROUND_WORK_ALLOWED = False
@@ -452,20 +510,24 @@ def execute_desktop_or_file_intent(intent, metadata, raw_query: str = ""):
         else:
             SCREEN_ACCESS_ALLOWED = True
             BACKGROUND_WORK_ALLOWED = True
+            EMAIL_MESSAGING_ALLOWED = True
             try:
                 update_preference("screen_access_allowed", True)
                 update_preference("background_work_allowed", True)
+                update_preference("email_messaging_allowed", True)
             except Exception:
                 pass
-            return True, "Screen access and background work permissions have been granted, Sir."
+            return True, "Screen access, background work, and messaging permissions have been granted, Sir."
 
     # If action was accompanied by permission grant metadata, guarantee permissions are saved
     if metadata.get("permission_granted"):
         SCREEN_ACCESS_ALLOWED = True
         BACKGROUND_WORK_ALLOWED = True
+        EMAIL_MESSAGING_ALLOWED = True
         try:
             update_preference("screen_access_allowed", True)
             update_preference("background_work_allowed", True)
+            update_preference("email_messaging_allowed", True)
         except Exception:
             pass
 
@@ -1337,6 +1399,13 @@ def ask_neura(user_message):
         speak(res)
         remember_interaction(user_message_clean, res)
         log_activity(f"Action {intent}: {res[:40]}")
+        return res
+    handled, res = execute_communication_intent(intent, metadata, user_message_clean)
+    if handled:
+        speak(res)
+        remember_interaction(user_message_clean, res)
+        orch.memory_agent.record_task_success(user_message_clean, str(intent), res)
+        log_activity(f"Communication {intent}: {res[:40]}")
         return res
 
     um_lower = user_message_clean.lower()
@@ -2945,6 +3014,13 @@ if __name__ == "__main__":
             remember_interaction(query, res)
             agent_orchestrator.memory_agent.record_task_success(query, str(intent), res)
             log_activity(f"Action {intent}: {res[:40]}")
+            continue
+        handled, res = execute_communication_intent(intent, metadata, query)
+        if handled:
+            speak(res)
+            remember_interaction(query, res)
+            agent_orchestrator.memory_agent.record_task_success(query, str(intent), res)
+            log_activity(f"Communication {intent}: {res[:40]}")
             continue
 
         if 'wikipedia' in query:

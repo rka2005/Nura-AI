@@ -4,7 +4,7 @@ Classifies user queries into System Actions, Memory Operations, External Lookups
 """
 
 import re
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, Optional
 
 class IntentType:
     EXIT = "EXIT"
@@ -32,6 +32,9 @@ class IntentType:
     SYSTEM_BACKGROUND_STATUS = "SYSTEM_BACKGROUND_STATUS"
     SYSTEM_SCREEN_AND_BACKGROUND_STATUS = "SYSTEM_SCREEN_AND_BACKGROUND_STATUS"
     SYSTEM_AUDIBILITY_CHECK = "SYSTEM_AUDIBILITY_CHECK"
+    
+    COMMUNICATION_EMAIL = "COMMUNICATION_EMAIL"
+    COMMUNICATION_WHATSAPP = "COMMUNICATION_WHATSAPP"
     
     MEMORY_CLEAR = "MEMORY_CLEAR"
     MEMORY_INSPECT = "MEMORY_INSPECT"
@@ -89,6 +92,121 @@ class IntentType:
 
     CONVERSATION = "CONVERSATION"
 
+def _extract_whatsapp_details(query: str) -> Optional[Dict[str, Any]]:
+    """
+    Extracts recipient and message for WhatsApp intents.
+    Returns dict with recipient, message, and target_app or None.
+    """
+    q = query.strip()
+    ql = q.lower()
+
+    # Must contain whatsapp keyword or messaging pattern
+    if not any(k in ql for k in ["whatsapp", "whats app", "what's app"]):
+        return None
+
+    # Strip conversational filler prefixes
+    cleaned = re.sub(r"^(?:neura\s+|can\s+you\s+|could\s+you\s+|please\s+|i\s+want\s+to\s+|now\s+)+", "", q, flags=re.IGNORECASE).strip()
+
+    # Connector regex: saying that, saying, that, with message, message:, telling him, telling her, with text, :
+    connector_regex = r"\s+(?:saying\s+that|saying|that|with\s+message|message\s*:|telling\s+(?:him|her)\s+that|telling\s+(?:him|her)|with\s+text|:)\s*"
+
+    # 1. Pattern with connector: "to <recipient> <connector> <message>" or "whatsapp <recipient> <connector> <message>"
+    m = re.search(r"(?:(?:send\s+(?:a\s+)?(?:whatsapp|whats\s+app)(?:\s+message)?\s+to\s+)|(?:(?:whatsapp|whats\s+app)(?:\s+to)?\s+)|(?:send\s+(?:a\s+)?message\s+to\s+)|(?:send\s+(?:a\s+)?message\s+on\s+(?:whatsapp|whats\s+app)\s+to\s+)|(?:open\s+(?:whatsapp|whats\s+app)(?:\s+web)?(?:\s+and)?\s+send\s+(?:a\s+)?message\s+to\s+))(.+?)" + connector_regex + r"(.*)$", cleaned, re.IGNORECASE)
+    if m:
+        rec = m.group(1).strip()
+        msg = m.group(2).strip()
+        rec = re.sub(r"\s+on\s+(?:whatsapp|whats\s+app)$", "", rec, flags=re.IGNORECASE).strip()
+        if rec and rec.lower() not in ["web", "app", "application"]:
+            return {"recipient": rec, "message": msg, "target_app": "whatsapp"}
+
+    # 2. General connector fallback: any query with 'to <recipient> <connector> <message>'
+    m_gen_conn = re.search(r"\bto\s+(.+?)" + connector_regex + r"(.*)$", cleaned, re.IGNORECASE)
+    if m_gen_conn:
+        rec = m_gen_conn.group(1).strip()
+        msg = m_gen_conn.group(2).strip()
+        rec = re.sub(r"\s+on\s+(?:whatsapp|whats\s+app)$", "", rec, flags=re.IGNORECASE).strip()
+        if rec and rec.lower() not in ["web", "app", "application"]:
+            return {"recipient": rec, "message": msg, "target_app": "whatsapp"}
+
+    # 3. Direct pattern without connector (e.g. "whatsapp <recipient> <message>")
+    m_no_conn = re.search(r"(?:(?:send\s+(?:a\s+)?(?:whatsapp|whats\s+app)(?:\s+message)?\s+to)|(?:(?:whatsapp|whats\s+app)\s+(?:to\s+)?)|(?:send\s+(?:a\s+)?message\s+to))\s+([^\s:,]+(?:\s+[^\s:,]+)?)\s*(.*)$", cleaned, re.IGNORECASE)
+    if m_no_conn:
+        rec = m_no_conn.group(1).strip()
+        msg = m_no_conn.group(2).strip()
+        rec = re.sub(r"\s+on\s+(?:whatsapp|whats\s+app)$", "", rec, flags=re.IGNORECASE).strip()
+        if rec and rec.lower() not in ["web", "app", "application"]:
+            return {"recipient": rec, "message": msg, "target_app": "whatsapp"}
+
+    # 4. Fallback: "send whatsapp message to <recipient>"
+    m_fall = re.search(r"(?:whatsapp|whats\s+app).*\bto\s+([^\s:,]+(?:\s+[^\s:,]+)?)", cleaned, re.IGNORECASE)
+    if m_fall:
+        rec = m_fall.group(1).strip()
+        rec = re.sub(r"\s+on\s+(?:whatsapp|whats\s+app)$", "", rec, flags=re.IGNORECASE).strip()
+        if rec and rec.lower() not in ["web", "app", "application"]:
+            return {"recipient": rec, "message": "", "target_app": "whatsapp"}
+
+    return None
+
+def _extract_email_details(query: str) -> Optional[Dict[str, Any]]:
+    """
+    Extracts recipient, sender (optional), subject (optional), and body for Email intents.
+    """
+    q = query.strip()
+    ql = q.lower()
+
+    # Must contain email or mail keywords
+    is_email_cmd = (
+        any(k in ql for k in ["send email", "send an email", "send mail", "send a mail", "mail to ", "email to ", "compose email", "write email", "dispatch email"])
+        or (re.search(r"\b(?:send|compose|write|dispatch)\s+(?:an?\s+)?(?:email|mail)\b", ql))
+        or (re.search(r"\b(?:email|mail)\s+(?:to\s+)?[\w\.-]+@[\w\.-]+\.\w+", ql))
+    )
+    if not is_email_cmd:
+        return None
+
+    cleaned = re.sub(r"^(?:neura\s+|can\s+you\s+|could\s+you\s+|please\s+|i\s+want\s+to\s+|now\s+)+", "", q, flags=re.IGNORECASE).strip()
+
+    # 1. Sender extraction (e.g., "from abc@xyz.com")
+    from_email = None
+    from_match = re.search(r"\bfrom\s+([a-zA-Z0-9_\.-]+@[a-zA-Z0-9_\.-]+\.[a-zA-Z0-9]+)\b", cleaned, re.IGNORECASE)
+    if from_match:
+        from_email = from_match.group(1).strip()
+        cleaned = cleaned[:from_match.start()] + " " + cleaned[from_match.end():]
+
+    # 2. Subject extraction (e.g., "with subject <subject> saying <body>" or "subject: <subject>")
+    subject = None
+    subj_match = re.search(r"(?:with\s+)?subject\s+(?:is\s+|:\s*)?([^\n,]+?)(?:\s+(?:body|saying|that|with\s+body|telling|:)\s+|$)", cleaned, re.IGNORECASE)
+    if subj_match:
+        subject = subj_match.group(1).strip()
+        cleaned = cleaned[:subj_match.start()] + " " + cleaned[subj_match.end():]
+
+    # 3. Recipient & Body extraction
+    recipient = ""
+    body = ""
+
+    # Check for direct email regex in cleaned query
+    email_in_query = re.search(r"([a-zA-Z0-9_\.-]+@[a-zA-Z0-9_\.-]+\.[a-zA-Z0-9]+)", cleaned)
+    if email_in_query:
+        recipient = email_in_query.group(1).strip()
+        after_email = cleaned[email_in_query.end():].strip()
+        after_email = re.sub(r"^(?:saying\s+that|saying|that|body\s*:|body|with\s+message|telling\s+(?:him|her)|:)\s*", "", after_email, flags=re.IGNORECASE).strip()
+        body = after_email
+    else:
+        # Recipient is a contact name following "to <name>"
+        to_match = re.search(r"\bto\s+([^\s:,]+(?:\s+[^\s:,]+)?)\s*(?:saying\s+that|saying|that|body\s*:|body|with\s+message|telling\s+(?:him|her)|:)?\s*(.*)", cleaned, re.IGNORECASE)
+        if to_match:
+            recipient = to_match.group(1).strip()
+            body = to_match.group(2).strip()
+
+    if recipient or is_email_cmd:
+        return {
+            "recipient": recipient,
+            "sender": from_email,
+            "subject": subject,
+            "body": body
+        }
+
+    return None
+
 def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
     """
     Analyzes raw input text and returns (IntentType, metadata_dict).
@@ -145,6 +263,55 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
             sub_intent, sub_meta = route_intent(remainder_cleaned)
             sub_meta["permission_granted"] = True
             return sub_intent, sub_meta
+
+    comm_compound_match = re.search(
+        r"^(?:by\s+)?(?:taking|take|grant|granting|allow|allowing|enable|enabling|give|giving|with|after\s+taking)\s+(?:the\s+)?(?:email\s+(?:and\s+)?(?:messaging|message)\s+permission[s]?|(?:messaging|message)\s+(?:and\s+)?email\s+permission[s]?|permission[s]?\s+to\s+send\s+(?:any\s+)?(?:email|message|whatsapp)(?:\s+or\s+(?:email|message|whatsapp))?)\s*(?:[,;]|\s+and|\s+then|\s+to|\s+i\s+want\s+to|\s+please)?\s*(.*)$",
+        q,
+        re.IGNORECASE
+    )
+    if comm_compound_match:
+        remainder = comm_compound_match.group(1).strip()
+        remainder_cleaned = re.sub(
+            r"^(?:and\s+|then\s+|to\s+|i\s+want\s+to\s+|please\s+)+",
+            "",
+            remainder,
+            flags=re.IGNORECASE
+        ).strip()
+        if remainder_cleaned:
+            sub_intent, sub_meta = route_intent(remainder_cleaned)
+            sub_meta["permission_granted"] = True
+            return sub_intent, sub_meta
+
+    # Email and Messaging Permissions (standalone grant/revoke)
+    has_comm_perm_phrase = any(p in q for p in [
+        'permission to send any email or message', 'permission to send email or message',
+        'permission to send any email', 'permission to send any message',
+        'give permission to send any email or message', 'give permission to send email or message',
+        'give permission to send email', 'give permission to send message',
+        'give permission to send any email', 'give permission to send any message',
+        'grant permission to send email or message', 'grant permission to send any email or message',
+        'grant permission to send email', 'grant permission to send message',
+        'permission to send email', 'permission to send message', 'email permission', 'message permission',
+        'messaging permission', 'whatsapp permission', 'permission to send whatsapp',
+        'allow sending email', 'allow sending message', 'allow sending emails and messages',
+        'allow email and message', 'allow email and messages', 'grant email and message permission',
+        'allow email and whatsapp', 'whatsapp and email permission'
+    ])
+    if has_comm_perm_phrase:
+        is_revoke = any(w in q for w in ['stop', 'disable', 'revoke', 'deny', "don't", "dont"])
+        if is_revoke:
+            return IntentType.SYSTEM_PERMISSION, {"action": "revoke", "permission_type": "email_messaging"}
+        return IntentType.SYSTEM_PERMISSION, {"action": "grant", "permission_type": "email_messaging"}
+
+    # WhatsApp Messaging Intent
+    wa_details = _extract_whatsapp_details(query)
+    if wa_details:
+        return IntentType.COMMUNICATION_WHATSAPP, wa_details
+
+    # Email Sending Intent
+    email_details = _extract_email_details(query)
+    if email_details:
+        return IntentType.COMMUNICATION_EMAIL, email_details
 
     # -------------------------------------------------------------------------
     # Agent Workspace / 3D Virtual Office - Open & Close

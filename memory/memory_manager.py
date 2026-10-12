@@ -119,6 +119,8 @@ class MemoryManager:
             self.save_user_memory()
             print(f"\nPreference detected:\n{key} = {value}\n")
 
+    update_preference = set_preference
+
     def add_fact(self, category: str, value: str):
         if category not in self.user_memory["user_facts"]:
             self.user_memory["user_facts"][category] = []

@@ -680,12 +680,13 @@ class AgentOrchestrator:
                 tname = metadata.get("name", "Active Background Task")
                 self._custom_assigned_tasks["system_monitor"] = f"Monitoring: {tname}"
 
-            # 9. Skills, Tools, Desktop Actions, Apps, Files
+            # 9. Skills, Tools, Desktop Actions, Apps, Files, Communications
             elif intent in [
                 "AGENT_SKILL_LEARN", "AGENT_SKILL_RUN", "SYSTEM_APP_OPEN", "SYSTEM_APP_CLOSE",
                 "SYSTEM_FOLDER_OPEN", "SYSTEM_FILE_OPEN", "FILE_CREATE", "FILE_READ",
                 "FILE_UPDATE", "FILE_DELETE", "FILE_LIST", "DESKTOP_SEARCH_IN_TAB",
-                "DESKTOP_TYPE", "DESKTOP_HOTKEY", "DESKTOP_FIRST_LINK", "DESKTOP_SCREENSHOT"
+                "DESKTOP_TYPE", "DESKTOP_HOTKEY", "DESKTOP_FIRST_LINK", "DESKTOP_SCREENSHOT",
+                "COMMUNICATION_EMAIL", "COMMUNICATION_WHATSAPP"
             ]:
                 self.skill_agent.status = AgentStatus.BUSY
                 self._custom_assigned_tasks["skill_runner"] = f"Executing tool: {query[:35] or intent}"
