@@ -656,3 +656,34 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 <div align="center">
   <sub>Built with passion for next-generation Human-AI interaction.</sub>
 </div>
+
+- **`1`**: Switch to **Orange / Gold** Theme (Classic Core)
+- **`2`**: Switch to **Neon Purple** Theme (Cyberpunk)
+- **`3`**: Switch to **Battle Red** Theme (Combat Matrix)
+- **`4`**: Switch to **Bio Matrix** Theme (Emerald Scanner)
+- **`U`**: Toggle **Ultra-Bold** HUD Line Geometry
+- **`Enter`**: Send typed command in the input box
+- **`Esc`**: Clear current input box text
+- **`Mouse Wheel`**: Scroll through chat history inside the conversation panel
+
+---
+
+## 👤 Developer & Contact
+
+**Neura AI** is designed and actively developed by **Rohit Kumar Adak**.
+
+- **Author**: Rohit Kumar Adak
+- **Email**: [rohitadak0@gmail.com](mailto:rohitadak0@gmail.com)
+- **Phone**: `+91 834875905`
+- **GitHub**: [@rka2005](https://github.com/rka2005)
+- **Repository**: [https://github.com/rka2005/Nura-AI](https://github.com/rka2005/Nura-AI)
+
+---
+
+## 📄 License
+
+This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
+
+<div align="center">
+  <sub>Built with passion for next-generation Human-AI interaction.</sub>
+</div>

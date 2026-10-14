@@ -1,7 +1,0 @@
-Dear Tester,
-
-End to end test passing.
-
-Best regards,
-Rohit
-(Sent via Neura AI Assistant)

@@ -20,6 +20,8 @@ class IntentType:
     SYSTEM_ALERT_LIST = "SYSTEM_ALERT_LIST"
     SYSTEM_ALERT_CANCEL = "SYSTEM_ALERT_CANCEL"
     SYSTEM_ALERT_STOP = "SYSTEM_ALERT_STOP"
+    SYSTEM_NOTIFICATION_QUERY = "SYSTEM_NOTIFICATION_QUERY"
+    SYSTEM_NOTIFICATION_CLEAR = "SYSTEM_NOTIFICATION_CLEAR"
     SYSTEM_MEDIA = "SYSTEM_MEDIA"
     SYSTEM_YOUTUBE_PLAY = "SYSTEM_YOUTUBE_PLAY"
     SYSTEM_YOUTUBE_SEARCH = "SYSTEM_YOUTUBE_SEARCH"
@@ -1153,6 +1155,18 @@ def route_intent(query: str) -> Tuple[str, Dict[str, Any]]:
             'remind me in', 'set timer', 'start timer'
         ]):
             return IntentType.SYSTEM_ALERT_SET, alert_data
+
+    # Cross-App & System Desktop Notifications
+    if any(k in q for k in ['notification', 'notifications']):
+        if any(c in q for c in ['clear', 'delete', 'remove', 'dismiss', 'reset']):
+            return IntentType.SYSTEM_NOTIFICATION_CLEAR, {"query": query}
+        else:
+            app_filter = None
+            for app_cand in ['whatsapp', 'chrome', 'edge', 'outlook', 'email', 'system', 'slack', 'telegram', 'discord', 'browser']:
+                if app_cand in q:
+                    app_filter = app_cand
+                    break
+            return IntentType.SYSTEM_NOTIFICATION_QUERY, {"query": query, "app_filter": app_filter}
 
     # Media controls
     if any(m in q for m in ['pause song', 'pause video', 'pause music', 'resume music', 'pause or resume', 'pause media']):

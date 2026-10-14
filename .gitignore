@@ -22,3 +22,5 @@ report.docx
 report.doc
 audit_reports/
 alerts.json
+notifications.json
+sent_emails/

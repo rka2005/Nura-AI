@@ -317,57 +317,68 @@ def speak(audio):
     if not text:
         return
 
-    # Preserve Neura's existing frontend chat integration.
-    send_to_frontend("neura", text)
-
-    # Prefer Sarvam AI voice.
-    try:
-        print("[Neura Voice] Generating Sarvam speech...", flush=True)
-
-        audio_bytes = asyncio.run(
-            _generate_sarvam_audio(text)
-        )
-
-        _play_sarvam_audio(audio_bytes)
-
-        print("[Neura Voice] Speech completed.", flush=True)
-        return
-
-    except Exception as exc:
-        print(
-            f"[Sarvam TTS Error] {type(exc).__name__}: {exc}",
-            flush=True,
-        )
-        print(
-            "[Neura Voice] Falling back to Windows speech.",
-            flush=True,
-        )
-
-    # Fallback: your original local TTS.
-    engine = None
+    globals()["ASSISTANT_IS_SPEAKING"] = True
 
     try:
-        engine = pyttsx3.init("sapi5")
-        voices = engine.getProperty("voices")
+        # Preserve Neura's existing frontend chat integration.
+        send_to_frontend("neura", text)
 
-        if len(voices) > 1:
-            engine.setProperty("voice", voices[1].id)
+        # Prefer Sarvam AI voice.
+        try:
+            print("[Neura Voice] Generating Sarvam speech...", flush=True)
 
-        engine.setProperty("rate", 180)
-        engine.setProperty("volume", 1.0)
+            audio_bytes = asyncio.run(
+                _generate_sarvam_audio(text)
+            )
 
-        engine.say(text)
-        engine.runAndWait()
+            _play_sarvam_audio(audio_bytes)
 
-    except Exception as exc:
-        print(f"[Windows TTS Error] {exc}", flush=True)
+            print("[Neura Voice] Speech completed.", flush=True)
+            return
 
-    finally:
-        if engine is not None:
+        except Exception as exc:
+            print(
+                f"[Sarvam TTS Error] {type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            print(
+                "[Neura Voice] Falling back to Windows speech.",
+                flush=True,
+            )
+
+        # Fallback: your original local TTS.
+        engine = None
+
+        try:
             try:
-                engine.stop()
+                import pythoncom
+                pythoncom.CoInitialize()
             except Exception:
                 pass
+
+            engine = pyttsx3.init("sapi5")
+            voices = engine.getProperty("voices")
+
+            if len(voices) > 1:
+                engine.setProperty("voice", voices[1].id)
+
+            engine.setProperty("rate", 180)
+            engine.setProperty("volume", 1.0)
+
+            engine.say(text)
+            engine.runAndWait()
+
+        except Exception as exc:
+            print(f"[Windows TTS Error] {exc}", flush=True)
+
+        finally:
+            if engine is not None:
+                try:
+                    engine.stop()
+                except Exception:
+                    pass
+    finally:
+        globals()["ASSISTANT_IS_SPEAKING"] = False
 
 
 def wishMe():
@@ -877,6 +888,34 @@ def execute_alert_intent(intent, metadata, raw_query: str = ""):
         else:
             return True, "Sir, please tell me after how many minutes or at what time you would like me to set the alert."
 
+def execute_notification_intent(intent, metadata, raw_query: str = ""):
+    """
+    Executes user requests regarding desktop & cross-app notifications.
+    Supports querying latest notifications or clearing notification history.
+    """
+    valid_intents = [
+        getattr(IntentType, "SYSTEM_NOTIFICATION_QUERY", "SYSTEM_NOTIFICATION_QUERY"),
+        getattr(IntentType, "SYSTEM_NOTIFICATION_CLEAR", "SYSTEM_NOTIFICATION_CLEAR"),
+    ]
+    if intent not in valid_intents:
+        return False, ""
+
+    from brain.system_notification_listener import get_system_notification_listener
+    listener = get_system_notification_listener(voice_speaker_fn=speak)
+
+    if intent == getattr(IntentType, "SYSTEM_NOTIFICATION_CLEAR", "SYSTEM_NOTIFICATION_CLEAR"):
+        count, msg = listener.clear_notifications()
+        card = f"🔔 **Notifications Cleared**\n\n• {msg}"
+        send_to_frontend("neura", card)
+        return True, msg
+
+    # SYSTEM_NOTIFICATION_QUERY
+    app_filter = metadata.get("app_filter")
+    card = listener.format_notifications_card(limit=5, app_filter=app_filter)
+    send_to_frontend("neura", card)
+    summary = listener.format_notifications_summary(limit=3, app_filter=app_filter)
+    return True, summary
+
 def classify_terminal_permission_reply(reply: str) -> Optional[bool]:
     """
     Classifies user reply for terminal permission into:
@@ -1353,6 +1392,16 @@ def ask_neura(user_message):
         speak(res)
         remember_interaction(user_message_clean, res)
         log_activity(f"Alert {intent}: {res[:40]}")
+        return res
+
+    # Check Cross-App & System Notification Subsystem
+    handled, res = execute_notification_intent(intent, metadata, user_message_clean)
+    if handled:
+        orch.release_agents(grace_period=3.5)
+        speak(res)
+        remember_interaction(user_message_clean, res)
+        orch.memory_agent.record_task_success(user_message_clean, str(intent), res)
+        log_activity(f"Notification {intent}: {res[:40]}")
         return res
 
     # Check Audibility & Microphone/Speaker Hardware Check (Zero API Call)
@@ -2903,6 +2952,10 @@ if __name__ == "__main__":
     from brain.alert_service import get_alert_service
     get_alert_service(voice_speaker_fn=speak)
 
+    from brain.system_notification_listener import get_system_notification_listener
+    notif_listener = get_system_notification_listener(voice_speaker_fn=speak)
+    notif_listener.start()
+
     reminder_thread = threading.Thread(target=check_reminders, daemon=True)
     reminder_thread.start()
 
@@ -2961,6 +3014,16 @@ if __name__ == "__main__":
             remember_interaction(query, res)
             agent_orchestrator.memory_agent.record_task_success(query, str(intent), res)
             log_activity(f"Alert {intent}: {res[:40]}")
+            continue
+
+        # Check Cross-App & System Notification Subsystem
+        handled, res = execute_notification_intent(intent, metadata, query)
+        if handled:
+            agent_orchestrator.release_agents(grace_period=3.5)
+            speak(res)
+            remember_interaction(query, res)
+            agent_orchestrator.memory_agent.record_task_success(query, str(intent), res)
+            log_activity(f"Notification {intent}: {res[:40]}")
             continue
 
         # Check Audibility & Microphone/Speaker Hardware Check (Zero API Call)
@@ -3364,6 +3427,17 @@ if __name__ == "__main__":
 
         elif 'reminder' in query:
             set_reminder()
+
+        elif 'notification' in query or 'notifications' in query:
+            handled, res = execute_notification_intent(intent, metadata, query)
+            if not handled:
+                from brain.system_notification_listener import get_system_notification_listener
+                lst = get_system_notification_listener(voice_speaker_fn=speak)
+                card = lst.format_notifications_card()
+                send_to_frontend("neura", card)
+                res = lst.format_notifications_summary()
+                speak(res)
+            remember_interaction(query, res)
 
         elif 'joke' in query or 'jokes' in query:
             joke = pyjokes.get_joke()
